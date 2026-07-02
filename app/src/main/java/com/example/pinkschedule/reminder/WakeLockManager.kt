@@ -12,9 +12,7 @@ object WakeLockManager {
     @Volatile
     private var startupWakeLock: PowerManager.WakeLock? = null
 
-    // 仅保留 PARTIAL_WAKE_LOCK：铃响期间保持 CPU 唤醒。
-    // 屏幕点亮不再依赖已废弃、Android 10+ 基本失效的 SCREEN_BRIGHT_WAKE_LOCK，
-    // 改由 AlarmAlertActivity 的 setTurnScreenOn/setShowWhenLocked（经全屏 Intent 拉起）负责。
+    // 仅保留 PARTIAL_WAKE_LOCK：铃响期间保持 CPU 唤醒，提醒展示交给通知/横幅。
     fun acquire(context: Context, timeoutMs: Long = ALARM_WAKE_LOCK_TIMEOUT_MS): PowerManager.WakeLock? {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val wakeLock = powerManager.newWakeLock(

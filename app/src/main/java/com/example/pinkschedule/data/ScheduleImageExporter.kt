@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import com.example.pinkschedule.model.LessonTimeSlot
+import com.example.pinkschedule.model.ScheduleDefaults
 import com.example.pinkschedule.model.WeeklySchedule
 import java.io.File
 import java.io.FileOutputStream
@@ -91,7 +92,7 @@ object ScheduleImageExporter {
         periods.forEachIndexed { rowIndex, slot ->
             val top = tableTop + rowIndex * rowHeight
             val periodCenterX = tableLeft + leftWidth / 2f
-            drawCenteredText(canvas, "第${slot.period}节", periodPaint, periodCenterX, top + 45f)
+            drawCenteredText(canvas, ScheduleDefaults.periodLabel(slot.period), periodPaint, periodCenterX, top + 45f)
             drawCenteredText(canvas, slot.displayRange(), timePaint, periodCenterX, top + 78f)
 
             DayOfWeek.entries.forEachIndexed { colIndex, day ->

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.pinkschedule.data.ScheduleRepository
+import java.time.LocalDateTime
 
 class AlarmReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -39,6 +40,11 @@ class AlarmReminderReceiver : BroadcastReceiver() {
         if (isDebug || signature.isNullOrBlank()) {
             return true
         }
+        if (isAlreadyInLesson(intent)) {
+            ScheduleRepository.markAlarmDelivered(context, signature)
+            Log.i(TAG, "drop late alarm because lesson already started signature=$signature")
+            return false
+        }
         if (ScheduleRepository.loadDeliveredAlarmSignatures(context).contains(signature)) {
             Log.i(TAG, "drop delivered alarm signature=$signature")
             return false
@@ -51,6 +57,13 @@ class AlarmReminderReceiver : BroadcastReceiver() {
             inFlightSignatures += signature
         }
         return true
+    }
+
+    private fun isAlreadyInLesson(intent: Intent?): Boolean {
+        val lessonStart = runCatching {
+            intent?.getStringExtra(EXTRA_LESSON_START)?.let(LocalDateTime::parse)
+        }.getOrNull() ?: return false
+        return !LocalDateTime.now().isBefore(lessonStart)
     }
 
     private fun logTrigger(intent: Intent?) {
@@ -69,12 +82,13 @@ class AlarmReminderReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "AlarmReminderReceiver"
 
-        const val CHANNEL_ID = "lesson_alarm_v3"
+        const val CHANNEL_ID = "lesson_alarm_v4"
         const val EXTRA_CLASS_NAME = "extra_class_name"
         const val EXTRA_TIME_RANGE = "extra_time_range"
         const val EXTRA_PERIOD = "extra_period"
         const val EXTRA_TRIGGER_AT = "extra_trigger_at"
         const val EXTRA_TRIGGER_EPOCH_MILLIS = "extra_trigger_epoch_millis"
+        const val EXTRA_LESSON_START = "extra_lesson_start"
         const val EXTRA_IS_DEBUG = "extra_is_debug"
         const val EXTRA_SIGNATURE = "extra_signature"
         const val EXTRA_SOURCE = "extra_source"

@@ -5,7 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.pinkschedule.data.ScheduleRepository
 import com.example.pinkschedule.data.ScheduleTransfer
+import com.example.pinkschedule.data.LessonTimeProfilesTransfer
 import com.example.pinkschedule.model.CourseItem
+import com.example.pinkschedule.model.LessonTimeProfile
 import com.example.pinkschedule.model.LessonTimeSlot
 import com.example.pinkschedule.model.ReminderSettings
 import com.example.pinkschedule.model.ScheduleDefaults
@@ -23,7 +25,6 @@ data class ReminderSettingsAction(
     val message: String?,
     val requestExactAlarmPermission: Boolean = false,
     val requestNotificationPermission: Boolean = false,
-    val requestFullScreenIntentPermission: Boolean = false,
     val requestBatteryOptimization: Boolean = false,
     val requestAutoStart: Boolean = false
 )
@@ -34,10 +35,11 @@ data class ScheduleUiState(
         items = emptyList()
     ),
     val lessonTimes: List<LessonTimeSlot> = ScheduleDefaults.defaultLessonTimeSlots(),
+    val lessonTimeProfiles: List<LessonTimeProfile> = listOf(ScheduleDefaults.defaultLessonTimeProfile()),
+    val activeLessonTimeProfileId: String = ScheduleDefaults.DEFAULT_LESSON_TIME_PROFILE_ID,
     val reminderSettings: ReminderSettings = ReminderSettings(),
     val exactAlarmPermissionGranted: Boolean = true,
     val notificationPermissionGranted: Boolean = true,
-    val fullScreenIntentPermissionGranted: Boolean = true,
     val message: String? = null
 )
 
@@ -58,8 +60,7 @@ class ScheduleViewModel(
     fun refreshExactAlarmPermission() {
         _uiState.value = _uiState.value.copy(
             exactAlarmPermissionGranted = SystemAlarmScheduler.canUseExactAlarms(context),
-            notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
-            fullScreenIntentPermissionGranted = SystemAlarmScheduler.canUseFullScreenIntent(context)
+            notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context)
         )
     }
 
@@ -69,7 +70,7 @@ class ScheduleViewModel(
 
     fun upsertCourse(original: CourseItem?, edited: CourseItem): String? {
         val currentItems = _uiState.value.schedule.items.toMutableList()
-        val normalized = edited
+        val normalized = edited.copy(period = ScheduleDefaults.normalizePeriod(edited.period))
         val conflictingItem = currentItems.firstOrNull { item ->
             item != original &&
                 item.dayOfWeek == normalized.dayOfWeek &&
@@ -111,65 +112,51 @@ class ScheduleViewModel(
     }
 
     fun updateLessonTime(period: Int, startTime: LocalTime, endTime: LocalTime) {
+        updateLessonTimeForProfile(_uiState.value.activeLessonTimeProfileId, period, startTime, endTime)
+    }
+
+    fun updateLessonTimeForProfile(profileId: String, period: Int, startTime: LocalTime, endTime: LocalTime) {
         if (!endTime.isAfter(startTime)) {
             _uiState.value = _uiState.value.copy(message = "结束时间必须晚于开始时间。")
             return
         }
-        val updated = _uiState.value.lessonTimes
+        val current = profileSlots(profileId)
+        val updated = current
             .filterNot { it.period == period }
             .plus(LessonTimeSlot(period = period, startTime = startTime, endTime = endTime))
             .sortedBy { it.period }
-        runCatching {
-            ScheduleRepository.saveLessonTimes(context, updated)
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
-            val reminderSettings = _uiState.value.reminderSettings
-            syncLocalState(
-                schedule = _uiState.value.schedule,
-                lessonTimes = updated,
-                reminderSettings = reminderSettings,
-                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
-                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                fullScreenIntentPermissionGranted = _uiState.value.fullScreenIntentPermissionGranted,
-                message = if (reminderSettings.alarmModeEnabled) {
-                    refreshScheduledAlarms(
-                        schedule = _uiState.value.schedule,
-                        lessonTimes = updated,
-                        settings = reminderSettings
-                    ).message
-                } else {
-                    null
-                }
-            )
-        }.onFailure {
-            _uiState.value = _uiState.value.copy(message = "保存节次时间失败：${it.message ?: "未知错误"}")
-        }
+        saveProfileLessonTimes(profileId, updated, null)
     }
 
     fun addLessonTime() {
-        val current = _uiState.value.lessonTimes.sortedBy { it.period }
-        val nextPeriod = (current.maxOfOrNull { it.period } ?: ScheduleDefaults.MIN_LESSON_COUNT) + 1
+        addLessonTimeToProfile(_uiState.value.activeLessonTimeProfileId)
+    }
+
+    fun addLessonTimeToProfile(profileId: String) {
+        val current = profileSlots(profileId)
+        val nextPeriod = (current
+            .filter { ScheduleDefaults.isRegularCoursePeriod(it.period) }
+            .maxOfOrNull { it.period } ?: 0) + 1
         val previousEnd = current.lastOrNull()?.endTime ?: LocalTime.of(20, 40)
         val startTime = previousEnd.plusMinutes(10)
         val endTime = startTime.plusMinutes(45)
         val updated = current
             .plus(LessonTimeSlot(period = nextPeriod, startTime = startTime, endTime = endTime))
             .sortedBy { it.period }
-        saveLessonTimes(updated, "已新增${nextPeriod}节课时间。")
+        saveProfileLessonTimes(profileId, updated, "已新增${nextPeriod}节作息时间。")
     }
 
     fun deleteLessonTime(period: Int) {
-        val current = _uiState.value.lessonTimes.sortedBy { it.period }
-        if (period <= ScheduleDefaults.MIN_LESSON_COUNT || current.size <= ScheduleDefaults.MIN_LESSON_COUNT) {
-            _uiState.value = _uiState.value.copy(message = "课程时间最少保留 ${ScheduleDefaults.MIN_LESSON_COUNT} 节。")
-            return
-        }
-        if (_uiState.value.schedule.items.any { it.period == period }) {
-            _uiState.value = _uiState.value.copy(message = "第${period}节已有课程，不能删除该节次时间。")
-            return
-        }
+        deleteLessonTimeFromProfile(_uiState.value.activeLessonTimeProfileId, period)
+    }
+
+    fun deleteLessonTimeFromProfile(profileId: String, period: Int) {
+        val current = profileSlots(profileId)
+        val schedule = _uiState.value.schedule.copy(
+            items = normalizeCourses(_uiState.value.schedule.items.filterNot { it.period == period })
+        )
         val updated = current.filterNot { it.period == period }.sortedBy { it.period }
-        saveLessonTimes(updated, "已删除第${period}节课时间。")
+        saveProfileLessonTimes(profileId, updated, "已删除${ScheduleDefaults.periodLabel(period)}作息时间。", schedule)
     }
 
     fun updateReminderSettings(alarmModeEnabled: Boolean, minutesBefore: Int): ReminderSettingsAction {
@@ -189,10 +176,11 @@ class ScheduleViewModel(
                 syncLocalState(
                     schedule = _uiState.value.schedule,
                     lessonTimes = _uiState.value.lessonTimes,
+                    lessonTimeProfiles = _uiState.value.lessonTimeProfiles,
+                    activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
                     reminderSettings = disabledSettings,
                     exactAlarmPermissionGranted = false,
                     notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
-                    fullScreenIntentPermissionGranted = SystemAlarmScheduler.canUseFullScreenIntent(context),
                     message = "未授予精确闹钟权限，课程提醒无法保证准时，请先完成授权。"
                 )
                 ReminderSettingsAction(
@@ -214,40 +202,16 @@ class ScheduleViewModel(
                 syncLocalState(
                     schedule = _uiState.value.schedule,
                     lessonTimes = _uiState.value.lessonTimes,
+                    lessonTimeProfiles = _uiState.value.lessonTimeProfiles,
+                    activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
                     reminderSettings = disabledSettings,
                     exactAlarmPermissionGranted = hasExactAlarmPermission,
                     notificationPermissionGranted = false,
-                    fullScreenIntentPermissionGranted = SystemAlarmScheduler.canUseFullScreenIntent(context),
                     message = "未授予通知权限，提醒无法显示，请先完成授权。"
                 )
                 ReminderSettingsAction(
                     message = "未授予通知权限，提醒无法显示，请先完成授权。",
                     requestNotificationPermission = true
-                )
-            }.getOrElse {
-                ReminderSettingsAction(message = "保存提醒设置失败：${it.message ?: "未知错误"}")
-            }
-        }
-        val hasFullScreenIntentPermission = SystemAlarmScheduler.canUseFullScreenIntent(context)
-        if (alarmModeEnabled && !hasFullScreenIntentPermission) {
-            val disabledSettings = ReminderSettings(
-                alarmModeEnabled = false,
-                reminderMinutesBefore = minutesBefore
-            ).normalized()
-            return runCatching {
-                ScheduleRepository.saveReminderSettings(context, disabledSettings)
-                syncLocalState(
-                    schedule = _uiState.value.schedule,
-                    lessonTimes = _uiState.value.lessonTimes,
-                    reminderSettings = disabledSettings,
-                    exactAlarmPermissionGranted = hasExactAlarmPermission,
-                    notificationPermissionGranted = hasNotificationPermission,
-                    fullScreenIntentPermissionGranted = false,
-                    message = "未授予全屏闹钟权限，锁屏时无法像系统闹钟一样弹出，请先完成授权。"
-                )
-                ReminderSettingsAction(
-                    message = "未授予全屏闹钟权限，锁屏时无法像系统闹钟一样弹出，请先完成授权。",
-                    requestFullScreenIntentPermission = true
                 )
             }.getOrElse {
                 ReminderSettingsAction(message = "保存提醒设置失败：${it.message ?: "未知错误"}")
@@ -292,10 +256,11 @@ class ScheduleViewModel(
             syncLocalState(
                 schedule = _uiState.value.schedule,
                 lessonTimes = _uiState.value.lessonTimes,
+                lessonTimeProfiles = _uiState.value.lessonTimeProfiles,
+                activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
                 reminderSettings = settings,
                 exactAlarmPermissionGranted = hasExactAlarmPermission,
                 notificationPermissionGranted = hasNotificationPermission,
-                fullScreenIntentPermissionGranted = hasFullScreenIntentPermission,
                 message = finalMessage
             )
             ReminderSettingsAction(
@@ -322,24 +287,26 @@ class ScheduleViewModel(
 
     fun exportScheduleJson(): String {
         val state = _uiState.value
-        return ScheduleTransfer.toJson(state.schedule, state.lessonTimes)
+        return ScheduleTransfer.toJson(state.schedule)
     }
 
     fun importScheduleJson(raw: String): String? {
         return runCatching {
             val payload = ScheduleTransfer.fromJson(raw)
-            val normalizedItems = normalizeCourses(payload.schedule.items)
-            val lessonTimes = mergedLessonTimesFor(normalizedItems, payload.lessonTimes)
+            val validPeriods = _uiState.value.lessonTimes.map { it.period }.toSet()
+            val importedItems = normalizeCourses(payload.schedule.items)
+            val normalizedItems = importedItems.filter { it.period in validPeriods }
+            val removedCount = importedItems.size - normalizedItems.size
+            val lessonTimes = _uiState.value.lessonTimes
             val schedule = WeeklySchedule(
                 teacher = payload.schedule.teacher.ifBlank { ScheduleDefaults.DEFAULT_TEACHER },
                 items = normalizedItems
             )
-            ScheduleRepository.saveLessonTimes(context, lessonTimes)
             ScheduleRepository.save(context, schedule)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             val reminderSettings = _uiState.value.reminderSettings
-            val message = if (reminderSettings.alarmModeEnabled) {
+            val alarmMessage = if (reminderSettings.alarmModeEnabled) {
                 refreshScheduledAlarms(
                     schedule = schedule,
                     lessonTimes = lessonTimes,
@@ -348,13 +315,190 @@ class ScheduleViewModel(
             } else {
                 "课程表已导入。"
             }
+            val removalMessage = if (removedCount > 0) {
+                "已移除 ${removedCount} 条当前作息表未设置时间的无效课程。"
+            } else {
+                null
+            }
+            val message = listOfNotNull(alarmMessage, removalMessage).joinToString(" ")
             syncLocalState(
                 schedule = schedule,
                 lessonTimes = lessonTimes,
+                lessonTimeProfiles = _uiState.value.lessonTimeProfiles,
+                activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                fullScreenIntentPermissionGranted = _uiState.value.fullScreenIntentPermissionGranted,
+                message = message
+            )
+            removalMessage
+        }.getOrElse {
+            "导入失败：${it.message ?: "文件格式不正确"}"
+        }
+    }
+
+    fun selectLessonTimeProfile(profileId: String) {
+        val target = _uiState.value.lessonTimeProfiles.firstOrNull { it.id == profileId } ?: return
+        runCatching {
+            ScheduleRepository.setActiveLessonTimeProfileId(context, target.id)
+            ScheduleRepository.clearDeliveredAlarmSignatures(context)
+            ScheduleRepository.saveLastAlarmSignature(context, null)
+            val merged = mergedLessonTimesFor(_uiState.value.schedule.items, target.slots)
+            syncLocalState(
+                schedule = _uiState.value.schedule,
+                lessonTimes = merged,
+                lessonTimeProfiles = _uiState.value.lessonTimeProfiles.map {
+                    if (it.id == target.id) it.copy(slots = merged) else it
+                },
+                activeLessonTimeProfileId = target.id,
+                reminderSettings = _uiState.value.reminderSettings,
+                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
+                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
+                message = if (_uiState.value.reminderSettings.alarmModeEnabled) {
+                    refreshScheduledAlarms(_uiState.value.schedule, merged, _uiState.value.reminderSettings).message
+                } else {
+                    "已切换到${target.name}。"
+                }
+            )
+            ScheduleRepository.saveLessonTimeProfiles(context, _uiState.value.lessonTimeProfiles, target.id)
+        }.onFailure {
+            _uiState.value = _uiState.value.copy(message = "切换作息表失败：${it.message ?: "未知错误"}")
+        }
+    }
+
+    fun addLessonTimeProfile(
+        name: String = "新作息表",
+        slots: List<LessonTimeSlot> = _uiState.value.lessonTimes
+    ): String? {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) {
+            _uiState.value = _uiState.value.copy(message = "作息表名称不能为空。")
+            return null
+        }
+        val source = slots.sortedBy { it.period }
+        val profile = ScheduleRepository.newLessonTimeProfile(trimmed, source)
+        val updatedProfiles = _uiState.value.lessonTimeProfiles + profile
+        val activeId = _uiState.value.activeLessonTimeProfileId
+        ScheduleRepository.saveLessonTimeProfiles(context, updatedProfiles, activeId)
+        _uiState.value = _uiState.value.copy(
+            lessonTimeProfiles = updatedProfiles,
+            activeLessonTimeProfileId = activeId,
+            message = "已新增${profile.name}。"
+        )
+        return profile.id
+    }
+
+    fun renameLessonTimeProfile(profileId: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) {
+            _uiState.value = _uiState.value.copy(message = "作息表名称不能为空。")
+            return
+        }
+        val updated = _uiState.value.lessonTimeProfiles.map {
+            if (it.id == profileId) it.copy(name = trimmed) else it
+        }
+        ScheduleRepository.saveLessonTimeProfiles(context, updated, _uiState.value.activeLessonTimeProfileId)
+        _uiState.value = _uiState.value.copy(lessonTimeProfiles = updated, message = "已重命名作息表。")
+    }
+
+    fun deleteLessonTimeProfile(profileId: String) {
+        val current = _uiState.value.lessonTimeProfiles
+        if (current.size <= 1) {
+            _uiState.value = _uiState.value.copy(message = "至少保留一套作息表。")
+            return
+        }
+        if (_uiState.value.activeLessonTimeProfileId == profileId) {
+            _uiState.value = _uiState.value.copy(message = "当前作息表不能删除，请先切换到其他作息表。")
+            return
+        }
+        val updated = current.filterNot { it.id == profileId }
+        val activeId = _uiState.value.activeLessonTimeProfileId
+        val activeSlots = updated.first { it.id == activeId }.slots
+        val reminderSettings = _uiState.value.reminderSettings
+        ScheduleRepository.saveLessonTimeProfiles(context, updated, activeId)
+        _uiState.value = _uiState.value.copy(
+            lessonTimeProfiles = updated,
+            activeLessonTimeProfileId = activeId,
+            lessonTimes = activeSlots,
+            message = if (reminderSettings.alarmModeEnabled) {
+                ScheduleRepository.clearDeliveredAlarmSignatures(context)
+                ScheduleRepository.saveLastAlarmSignature(context, null)
+                refreshScheduledAlarms(_uiState.value.schedule, activeSlots, reminderSettings).message
+            } else {
+                "已删除作息表。"
+            }
+        )
+    }
+
+    fun deleteLessonTimeProfiles(profileIds: Set<String>) {
+        val current = _uiState.value.lessonTimeProfiles
+        val activeId = _uiState.value.activeLessonTimeProfileId
+        val removableIds = profileIds - activeId
+        if (removableIds.isEmpty()) {
+            _uiState.value = _uiState.value.copy(message = "当前作息表不能删除，请先切换到其他作息表。")
+            return
+        }
+        val updated = current.filterNot { it.id in removableIds }
+        if (updated.isEmpty()) {
+            _uiState.value = _uiState.value.copy(message = "至少保留一套作息表。")
+            return
+        }
+        ScheduleRepository.saveLessonTimeProfiles(context, updated, activeId)
+        _uiState.value = _uiState.value.copy(
+            lessonTimeProfiles = updated,
+            message = if (profileIds.contains(activeId)) {
+                "已删除可删除的作息表，当前作息表已保留。"
+            } else {
+                "已删除作息表。"
+            }
+        )
+    }
+
+    fun exportLessonTimeProfilesJson(profileIds: Set<String>): String {
+        val selectedIds = profileIds.ifEmpty { _uiState.value.lessonTimeProfiles.map { it.id }.toSet() }
+        val profiles = _uiState.value.lessonTimeProfiles.filter { it.id in selectedIds }
+            .ifEmpty { _uiState.value.lessonTimeProfiles }
+        return LessonTimeProfilesTransfer.toJson(profiles)
+    }
+
+    fun importLessonTimeProfileJson(raw: String, targetProfileId: String, defaultName: String): String? {
+        return runCatching {
+            val imported = LessonTimeProfilesTransfer.fromJson(raw).profiles.first()
+            val resolvedName = defaultName.ifBlank { imported.name }.ifBlank { "导入作息表" }
+            val currentProfiles = _uiState.value.lessonTimeProfiles
+            val importedProfile = ScheduleRepository.newLessonTimeProfile(
+                name = resolvedName,
+                sourceSlots = mergedLessonTimesFor(_uiState.value.schedule.items, imported.slots)
+            )
+            val updated = if (currentProfiles.any { it.id == targetProfileId }) {
+                currentProfiles.map { profile ->
+                    if (profile.id == targetProfileId) {
+                        importedProfile.copy(id = profile.id)
+                    } else {
+                        profile
+                    }
+                }
+            } else {
+                currentProfiles + importedProfile
+            }
+            val activeId = _uiState.value.activeLessonTimeProfileId
+            ScheduleRepository.saveLessonTimeProfiles(context, updated, activeId)
+            val activeSlots = updated.firstOrNull { it.id == activeId }?.slots ?: _uiState.value.lessonTimes
+            ScheduleRepository.clearDeliveredAlarmSignatures(context)
+            ScheduleRepository.saveLastAlarmSignature(context, null)
+            val message = if (_uiState.value.reminderSettings.alarmModeEnabled) {
+                refreshScheduledAlarms(_uiState.value.schedule, activeSlots, _uiState.value.reminderSettings).message
+            } else {
+                "作息表已导入。"
+            }
+            syncLocalState(
+                schedule = _uiState.value.schedule,
+                lessonTimes = activeSlots,
+                lessonTimeProfiles = updated,
+                activeLessonTimeProfileId = activeId,
+                reminderSettings = _uiState.value.reminderSettings,
+                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
+                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
                 message = message
             )
             null
@@ -370,6 +514,19 @@ class ScheduleViewModel(
         val lessonTimes = withContext(Dispatchers.IO) {
             mergedLessonTimesFor(storedSchedule, ScheduleRepository.loadLessonTimes(context))
         }
+        val lessonTimeProfiles = withContext(Dispatchers.IO) {
+            val activeId = ScheduleRepository.loadActiveLessonTimeProfileId(context)
+            ScheduleRepository.loadLessonTimeProfiles(context).map { profile ->
+                if (profile.id == activeId) {
+                    profile.copy(slots = lessonTimes)
+                } else {
+                    profile
+                }
+            }
+        }
+        val activeLessonTimeProfileId = withContext(Dispatchers.IO) {
+            ScheduleRepository.loadActiveLessonTimeProfileId(context)
+        }
         val reminderSettings = withContext(Dispatchers.IO) {
             ScheduleRepository.loadReminderSettings(context)
         }
@@ -384,18 +541,20 @@ class ScheduleViewModel(
             _uiState.value = ScheduleUiState(
                 schedule = schedule,
                 lessonTimes = lessonTimes,
+                lessonTimeProfiles = lessonTimeProfiles,
+                activeLessonTimeProfileId = activeLessonTimeProfileId,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = SystemAlarmScheduler.canUseExactAlarms(context),
                 notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
-                fullScreenIntentPermissionGranted = SystemAlarmScheduler.canUseFullScreenIntent(context),
             )
         } else {
             _uiState.value = ScheduleUiState(
                 lessonTimes = lessonTimes,
+                lessonTimeProfiles = lessonTimeProfiles,
+                activeLessonTimeProfileId = activeLessonTimeProfileId,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = SystemAlarmScheduler.canUseExactAlarms(context),
                 notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
-                fullScreenIntentPermissionGranted = SystemAlarmScheduler.canUseFullScreenIntent(context),
             )
         }
     }
@@ -419,10 +578,11 @@ class ScheduleViewModel(
             syncLocalState(
                 schedule = schedule,
                 lessonTimes = lessonTimes,
+                lessonTimeProfiles = updateActiveProfileSlots(lessonTimes),
+                activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                fullScreenIntentPermissionGranted = _uiState.value.fullScreenIntentPermissionGranted,
                 message = alarmMessage
             )
         }
@@ -431,19 +591,21 @@ class ScheduleViewModel(
     private fun syncLocalState(
         schedule: WeeklySchedule,
         lessonTimes: List<LessonTimeSlot>,
+        lessonTimeProfiles: List<LessonTimeProfile>,
+        activeLessonTimeProfileId: String,
         reminderSettings: ReminderSettings,
         exactAlarmPermissionGranted: Boolean,
         notificationPermissionGranted: Boolean,
-        fullScreenIntentPermissionGranted: Boolean,
         message: String?
     ) {
         _uiState.value = _uiState.value.copy(
             schedule = schedule,
             lessonTimes = lessonTimes,
+            lessonTimeProfiles = lessonTimeProfiles,
+            activeLessonTimeProfileId = activeLessonTimeProfileId,
             reminderSettings = reminderSettings,
             exactAlarmPermissionGranted = exactAlarmPermissionGranted,
             notificationPermissionGranted = notificationPermissionGranted,
-            fullScreenIntentPermissionGranted = fullScreenIntentPermissionGranted,
             message = message
         )
     }
@@ -461,19 +623,25 @@ class ScheduleViewModel(
         )
     }
 
-    private fun saveLessonTimes(updated: List<LessonTimeSlot>, message: String?) {
+    private fun saveLessonTimes(
+        updated: List<LessonTimeSlot>,
+        message: String?,
+        schedule: WeeklySchedule = _uiState.value.schedule
+    ) {
         runCatching {
             ScheduleRepository.saveLessonTimes(context, updated)
+            ScheduleRepository.save(context, schedule)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             val reminderSettings = _uiState.value.reminderSettings
             syncLocalState(
-                schedule = _uiState.value.schedule,
+                schedule = schedule,
                 lessonTimes = updated,
+                lessonTimeProfiles = updateActiveProfileSlots(updated),
+                activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                fullScreenIntentPermissionGranted = _uiState.value.fullScreenIntentPermissionGranted,
                 message = if (reminderSettings.alarmModeEnabled) {
                     refreshScheduledAlarms(
                         schedule = _uiState.value.schedule,
@@ -489,6 +657,66 @@ class ScheduleViewModel(
         }
     }
 
+    private fun saveProfileLessonTimes(
+        profileId: String,
+        updated: List<LessonTimeSlot>,
+        message: String?,
+        schedule: WeeklySchedule = _uiState.value.schedule
+    ) {
+        runCatching {
+            val activeId = _uiState.value.activeLessonTimeProfileId
+            val updatedProfiles = _uiState.value.lessonTimeProfiles.map { profile ->
+                if (profile.id == profileId) {
+                    profile.copy(slots = updated.sortedBy { it.period })
+                } else {
+                    profile
+                }
+            }
+            ScheduleRepository.saveLessonTimeProfiles(context, updatedProfiles, activeId)
+            ScheduleRepository.save(context, schedule)
+            ScheduleRepository.clearDeliveredAlarmSignatures(context)
+            ScheduleRepository.saveLastAlarmSignature(context, null)
+            val activeSlots = updatedProfiles.firstOrNull { it.id == activeId }?.slots ?: _uiState.value.lessonTimes
+            val reminderSettings = _uiState.value.reminderSettings
+            syncLocalState(
+                schedule = schedule,
+                lessonTimes = activeSlots,
+                lessonTimeProfiles = updatedProfiles,
+                activeLessonTimeProfileId = activeId,
+                reminderSettings = reminderSettings,
+                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
+                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
+                message = if (reminderSettings.alarmModeEnabled) {
+                    refreshScheduledAlarms(
+                        schedule = schedule,
+                        lessonTimes = activeSlots,
+                        settings = reminderSettings
+                    ).message
+                } else {
+                    message
+                }
+            )
+        }.onFailure {
+            _uiState.value = _uiState.value.copy(message = "保存作息时间失败：${it.message ?: "未知错误"}")
+        }
+    }
+
+    private fun updateActiveProfileSlots(slots: List<LessonTimeSlot>): List<LessonTimeProfile> {
+        val activeId = _uiState.value.activeLessonTimeProfileId
+        return _uiState.value.lessonTimeProfiles.map { profile ->
+            if (profile.id == activeId) {
+                profile.copy(slots = slots.sortedBy { it.period })
+            } else {
+                profile
+            }
+        }
+    }
+
+    private fun profileSlots(profileId: String): List<LessonTimeSlot> {
+        return (_uiState.value.lessonTimeProfiles.firstOrNull { it.id == profileId }?.slots
+            ?: _uiState.value.lessonTimes).sortedBy { it.period }
+    }
+
     private fun mergedLessonTimesFor(
         items: List<CourseItem>,
         current: List<LessonTimeSlot> = _uiState.value.lessonTimes
@@ -497,7 +725,9 @@ class ScheduleViewModel(
     }
 
     private fun normalizeCourses(items: List<CourseItem>): List<CourseItem> {
-        return items.sortedWith(compareBy({ it.dayOfWeek.value }, { it.period }, { it.className }))
+        return items
+            .map { it.copy(period = ScheduleDefaults.normalizePeriod(it.period)) }
+            .sortedWith(compareBy({ it.dayOfWeek.value }, { it.period }, { it.className }))
     }
 
     private fun dayOfWeekDisplay(dayOfWeek: java.time.DayOfWeek): String {

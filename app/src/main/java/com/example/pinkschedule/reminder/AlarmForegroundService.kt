@@ -38,7 +38,7 @@ import java.time.temporal.TemporalAdjusters
  * 前台服务受系统保护、进程常驻不休眠，是国产 ROM 上息屏提醒最可靠的一层。
  * 它与 setAlarmClock + WorkManager 看门狗叠加，形成多层冗余——任一层失效仍有兜底。
  *
- * 注意：本服务只负责“到点检测并触发”，实际响铃/全屏弹窗仍复用 AlarmRingingService。
+ * 注意：本服务始终负责展示今日课程；仅在课程闹钟开启时检测并触发响铃。
  * 去重复用 ScheduleRepository 的 delivered 签名，避免与 AlarmManager 路径重复响铃。
  */
 class AlarmForegroundService : Service() {
@@ -55,12 +55,16 @@ class AlarmForegroundService : Service() {
         }
         ensureChannel()
         startAsForeground()
-        if (wakeLock?.isHeld != true) {
+        val alarmModeEnabled = ScheduleRepository.loadReminderSettings(applicationContext).alarmModeEnabled
+        if (alarmModeEnabled && wakeLock?.isHeld != true) {
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
                 setReferenceCounted(false)
                 acquire()
             }
+        } else if (!alarmModeEnabled && wakeLock?.isHeld == true) {
+            runCatching { wakeLock?.release() }
+            wakeLock = null
         }
         if (tickerJob?.isActive != true) {
             tickerJob = scope.launch { runTicker() }
@@ -84,7 +88,6 @@ class AlarmForegroundService : Service() {
     private fun checkAndFire() {
         val settings = ScheduleRepository.loadReminderSettings(applicationContext)
         if (!settings.alarmModeEnabled) {
-            stopSelf()
             return
         }
         val items = ScheduleRepository.load(applicationContext)
@@ -95,16 +98,15 @@ class AlarmForegroundService : Service() {
         val delivered = ScheduleRepository.loadDeliveredAlarmSignatures(applicationContext)
         val timeIndex = lessonTimes.associateBy { it.period }
 
-        // 找出“已到提醒时刻、但还没投递过、且课还没结束”的最近一节课。
+        // 找出“已到提醒时刻、但尚未上课、且还没投递过”的最近一节课。
         data class Due(val item: CourseItem, val slot: LessonTimeSlot, val lessonStart: LocalDateTime)
 
         val due = items.mapNotNull { item ->
             val slot = timeIndex[item.period] ?: return@mapNotNull null
             val lessonStart = thisOrNextOccurrence(now, item, slot)
             val triggerAt = lessonStart.minusMinutes(settings.reminderMinutesBefore.toLong())
-            // 触发窗口：提醒时刻已到，且还没超过上课结束时间（避免补一堆过期的）。
-            val lessonEnd = LocalDateTime.of(lessonStart.toLocalDate(), slot.endTime)
-            if (now.isBefore(triggerAt) || now.isAfter(lessonEnd)) return@mapNotNull null
+            // 触发窗口：提醒时刻已到，但课程尚未开始；已在课中则不再补响。
+            if (now.isBefore(triggerAt) || !now.isBefore(lessonStart)) return@mapNotNull null
             val signature = deliverySignatureOf(item, lessonStart)
             if (delivered.contains(signature)) return@mapNotNull null
             Due(item, slot, lessonStart)
@@ -118,6 +120,8 @@ class AlarmForegroundService : Service() {
             putExtra(AlarmReminderReceiver.EXTRA_TIME_RANGE, due.slot.displayRange())
             putExtra(AlarmReminderReceiver.EXTRA_PERIOD, due.item.period)
             putExtra(AlarmReminderReceiver.EXTRA_SIGNATURE, signature)
+            putExtra(AlarmReminderReceiver.EXTRA_TRIGGER_AT, now.toString())
+            putExtra(AlarmReminderReceiver.EXTRA_LESSON_START, due.lessonStart.toString())
             putExtra(AlarmReminderReceiver.EXTRA_IS_DEBUG, false)
             putExtra(AlarmReminderReceiver.EXTRA_SOURCE, "foreground_ticker")
         }

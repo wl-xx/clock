@@ -2,6 +2,7 @@ package com.example.pinkschedule.reminder
 
 import com.example.pinkschedule.model.CourseItem
 import com.example.pinkschedule.model.LessonTimeSlot
+import com.example.pinkschedule.model.ScheduleDefaults
 import java.time.Duration
 import java.time.LocalDateTime
 
@@ -21,7 +22,7 @@ object TodayCourseSummary {
                 status,
                 summary.course.courseName.ifBlank { "课程" },
                 summary.course.className.ifBlank { "未填写班级" },
-                "第${summary.course.period}节",
+                ScheduleDefaults.periodLabel(summary.course.period),
                 summary.slot.displayRange()
             ).joinToString(" · ")
         } ?: "暂无未结束课程"

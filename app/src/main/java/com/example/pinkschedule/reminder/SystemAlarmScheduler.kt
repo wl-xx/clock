@@ -1,11 +1,15 @@
 package com.example.pinkschedule.reminder
 
 import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.pm.PackageManager
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import android.net.Uri
 import android.provider.Settings
@@ -44,7 +48,8 @@ object SystemAlarmScheduler {
         if (!normalized.alarmModeEnabled) {
             cancelAllScheduledAlarms(context)
             AlarmWatchdogWorker.cancel(context)
-            AlarmForegroundService.stop(context)
+            // 关闭课程闹钟只停止响铃调度；今日课程前台通知仍保持运行。
+            AlarmForegroundService.start(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             return AlarmResult(false, "闹钟模式未开启。")
@@ -132,27 +137,56 @@ object SystemAlarmScheduler {
         }
     }
 
-    fun canUseFullScreenIntent(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return true
+    fun ensureAlarmNotificationChannel(context: Context) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (manager.getNotificationChannel(AlarmReminderReceiver.CHANNEL_ID) != null) {
+            return
         }
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        return notificationManager.canUseFullScreenIntent()
+        val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val alarmAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AlarmReminderReceiver.CHANNEL_ID,
+                "课程提醒",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "课程闹钟提醒，请开启锁屏通知和横幅通知。"
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 600, 300, 600)
+                setSound(alarmSound, alarmAttributes)
+            }
+        )
     }
 
-    fun openFullScreenIntentPermissionSettings(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return false
-        }
-        val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-            data = android.net.Uri.parse("package:${context.packageName}")
+    fun openAlarmNotificationChannelSettings(context: Context): Boolean {
+        ensureAlarmNotificationChannel(context)
+        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            putExtra(Settings.EXTRA_CHANNEL_ID, AlarmReminderReceiver.CHANNEL_ID)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         val canHandle = intent.resolveActivity(context.packageManager) != null
         if (canHandle) {
             context.startActivity(intent)
         }
-        return canHandle
+        return canHandle || openAppNotificationSettings(context)
+    }
+
+    fun openAppNotificationSettings(context: Context): Boolean {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val canHandle = intent.resolveActivity(context.packageManager) != null
+        if (canHandle) {
+            context.startActivity(intent)
+        }
+        return canHandle || openAppDetailsSettings(context)
     }
 
     fun openBatteryOptimizationSettings(context: Context): Boolean {
@@ -285,18 +319,7 @@ object SystemAlarmScheduler {
         requestCode: Int
     ): ScheduleAttempt {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val showIntent = Intent(context, AlarmAlertActivity::class.java).apply {
-            putExtra(AlarmReminderReceiver.EXTRA_CLASS_NAME, reminder.className)
-            putExtra(AlarmReminderReceiver.EXTRA_TIME_RANGE, reminder.timeRange)
-            putExtra(AlarmReminderReceiver.EXTRA_PERIOD, reminder.item?.period ?: 0)
-            putExtra(AlarmReminderReceiver.EXTRA_SIGNATURE, reminder.deliverySignature())
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_NO_USER_ACTION
-            )
-        }
+        val showIntent = buildAppLaunchIntent(context)
         val showPendingIntent = PendingIntent.getActivity(
             context,
             requestCode + SHOW_REQUEST_CODE_OFFSET,
@@ -352,6 +375,7 @@ object SystemAlarmScheduler {
             putExtra(AlarmReminderReceiver.EXTRA_PERIOD, reminder.item?.period ?: 0)
             putExtra(AlarmReminderReceiver.EXTRA_TRIGGER_AT, reminder.triggerAt.toString())
             putExtra(AlarmReminderReceiver.EXTRA_TRIGGER_EPOCH_MILLIS, triggerMillis)
+            putExtra(AlarmReminderReceiver.EXTRA_LESSON_START, reminder.lessonStart.toString())
             putExtra(AlarmReminderReceiver.EXTRA_IS_DEBUG, reminder.isDebug)
             putExtra(AlarmReminderReceiver.EXTRA_SIGNATURE, reminder.deliverySignature())
             putExtra(AlarmReminderReceiver.EXTRA_SOURCE, source)
@@ -420,9 +444,8 @@ object SystemAlarmScheduler {
             alarmManager.cancel(backupPendingIntent)
             backupPendingIntent.cancel()
 
-            // 同步撤销 setAlarmClock 使用的 show PendingIntent（指向 AlarmAlertActivity），
-            // 否则多闹钟重排时旧的锁屏弹窗 PI 会残留。extras 不参与匹配，无需携带。
-            val showIntent = Intent(context, AlarmAlertActivity::class.java)
+            // 同步撤销 setAlarmClock 使用的 show PendingIntent。
+            val showIntent = buildAppLaunchIntent(context)
             val showPendingIntent = PendingIntent.getActivity(
                 context,
                 alarmRequestCode(index) + SHOW_REQUEST_CODE_OFFSET,
@@ -431,6 +454,12 @@ object SystemAlarmScheduler {
             )
             alarmManager.cancel(showPendingIntent)
             showPendingIntent.cancel()
+        }
+    }
+
+    private fun buildAppLaunchIntent(context: Context): Intent {
+        return (context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent()).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
     }
 

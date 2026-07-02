@@ -14,9 +14,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.ContextCompat
 import com.example.pinkschedule.R
 import com.example.pinkschedule.data.ScheduleRepository
+import com.example.pinkschedule.model.ScheduleDefaults
 import java.time.LocalDateTime
 
 class AlarmRingingService : Service() {
@@ -57,26 +57,24 @@ class AlarmRingingService : Service() {
             val period = intent?.getIntExtra(AlarmReminderReceiver.EXTRA_PERIOD, 0) ?: 0
             val isDebug = intent?.getBooleanExtra(AlarmReminderReceiver.EXTRA_IS_DEBUG, false) == true
             val signature = intent?.getStringExtra(AlarmReminderReceiver.EXTRA_SIGNATURE)
+            val lessonStart = runCatching {
+                intent?.getStringExtra(AlarmReminderReceiver.EXTRA_LESSON_START)?.let(LocalDateTime::parse)
+            }.getOrNull()
 
             Log.d(TAG, "start alarm service class=$className time=$timeRange debug=$isDebug")
 
+            if (!isDebug && lessonStart != null && !LocalDateTime.now().isBefore(lessonStart)) {
+                Log.i(TAG, "skip ringing because lesson already started signature=$signature lessonStart=$lessonStart")
+                markDelivered(signature, isDebug)
+                replenishAlarms(intent, isDebug)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
             ensureChannel()
 
-            // 非锁屏时用它直接弹出对话框式提醒界面（像系统闹钟）；锁屏时不弹，只发通知。
-            val alertIntent = Intent(this, AlarmAlertActivity::class.java).apply {
-                putExtra(AlarmReminderReceiver.EXTRA_CLASS_NAME, className)
-                putExtra(AlarmReminderReceiver.EXTRA_TIME_RANGE, timeRange)
-                putExtra(AlarmReminderReceiver.EXTRA_PERIOD, period)
-                putExtra(AlarmReminderReceiver.EXTRA_SIGNATURE, signature)
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_NO_USER_ACTION
-                )
-            }
             // 锁屏通知展示：班级 · 第N节 · 时间（VISIBILITY_PUBLIC 保证锁屏完整显示）。
-            val periodText = if (period > 0) "第${period}节" else null
+            val periodText = if (period >= 0) ScheduleDefaults.periodLabel(period) else null
             val detailText = listOfNotNull(className, periodText, timeRange).joinToString(" · ")
 
             // 点击通知 = 停止响铃但保留信息（换成静态通知），走 ACTION_STOP_KEEP_INFO。
@@ -91,8 +89,7 @@ class AlarmRingingService : Service() {
                 stopKeepIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-
-            // 铃声与震动统一由 AlarmPlaybackManager 负责，通知本身不再触发第二路音源。
+            // 通过高优先级通知渠道争取横幅/锁屏展示，实际长响铃由 AlarmPlaybackManager 负责。
             val notification = NotificationCompat.Builder(this, AlarmReminderReceiver.CHANNEL_ID)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
@@ -121,13 +118,6 @@ class AlarmRingingService : Service() {
                 NotificationManagerCompat.from(this).notify(AlarmReminderReceiver.NOTIFICATION_ID, notification)
             }
             AlarmPlaybackManager.start(this)
-            // 息屏/锁屏时依赖全屏 Intent 由系统拉起 Activity（后台 startActivity 会被拦截）；
-            // 仅当屏幕已亮且已解锁时直接拉起，避免多此一举被系统静默丢弃。
-            if (isInteractiveAndUnlocked()) {
-                runCatching {
-                    ContextCompat.startActivity(this, alertIntent, null)
-                }
-            }
             markDelivered(signature, isDebug)
             replenishAlarms(intent, isDebug)
         } catch (t: Throwable) {
@@ -144,12 +134,6 @@ class AlarmRingingService : Service() {
         WakeLockManager.release(wakeLock)
         wakeLock = null
         super.onDestroy()
-    }
-
-    private fun isInteractiveAndUnlocked(): Boolean {
-        val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
-        val keyguardManager = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
-        return powerManager.isInteractive && !keyguardManager.isKeyguardLocked
     }
 
     private fun stopAlarmAndSelf() {
@@ -173,22 +157,7 @@ class AlarmRingingService : Service() {
     }
 
     private fun ensureChannel() {
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (manager.getNotificationChannel(AlarmReminderReceiver.CHANNEL_ID) == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    AlarmReminderReceiver.CHANNEL_ID,
-                    "课程提醒",
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "课程与调试闹钟提醒"
-                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-                    // 铃声与震动统一由 AlarmPlaybackManager 播放，渠道自身不再触发音源/震动，避免叠加。
-                    enableVibration(false)
-                    setSound(null, null)
-                }
-            )
-        }
+        SystemAlarmScheduler.ensureAlarmNotificationChannel(this)
     }
 
     /** 停止响铃后，用一条静态（无声、低优先级、可手动划掉）通知保留课程信息。 */
