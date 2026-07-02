@@ -25,7 +25,8 @@ object ScheduleRepository {
                 item.teacher,
                 item.className,
                 item.dayOfWeek.name,
-                item.period.toString()
+                item.period.toString(),
+                item.courseName
             ).joinToString("|") { escape(it) }
         }
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -46,7 +47,8 @@ object ScheduleRepository {
                 teacher = parts[0],
                 className = parts[1],
                 dayOfWeek = dayOfWeek,
-                period = period
+                period = period,
+                courseName = parts.getOrNull(4).orEmpty().ifBlank { ScheduleDefaults.DEFAULT_COURSE_NAME }
             )
         }.toList()
     }

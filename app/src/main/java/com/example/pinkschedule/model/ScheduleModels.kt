@@ -8,7 +8,8 @@ data class CourseItem(
     val teacher: String,
     val className: String,
     val dayOfWeek: DayOfWeek,
-    val period: Int
+    val period: Int,
+    val courseName: String = ScheduleDefaults.DEFAULT_COURSE_NAME
 ) {
     fun displayTimeLabel(): String = "第${period}节"
 }
@@ -38,7 +39,9 @@ data class ReminderSettings(
 
 object ScheduleDefaults {
     const val DEFAULT_TEACHER = "吴林湘"
+    const val DEFAULT_COURSE_NAME = "数学"
     const val DEFAULT_REMINDER_MINUTES = 10
+    const val MIN_LESSON_COUNT = 10
 
     private val defaultTimePairs = mapOf(
         1 to (LocalTime.of(8, 0) to LocalTime.of(8, 45)),

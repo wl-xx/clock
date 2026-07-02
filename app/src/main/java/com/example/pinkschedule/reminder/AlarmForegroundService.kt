@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.pm.ServiceInfo
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -14,6 +15,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.pinkschedule.MainActivity
+import com.example.pinkschedule.R
 import com.example.pinkschedule.data.ScheduleRepository
 import com.example.pinkschedule.model.CourseItem
 import com.example.pinkschedule.model.LessonTimeSlot
@@ -69,7 +71,10 @@ class AlarmForegroundService : Service() {
 
     private suspend fun runTicker() {
         while (scope.isActive) {
-            runCatching { checkAndFire() }
+            runCatching {
+                refreshForegroundNotification()
+                checkAndFire()
+            }
                 .onFailure { Log.e(TAG, "ticker check failed", it) }
             delay(CHECK_INTERVAL_MS)
         }
@@ -147,22 +152,7 @@ class AlarmForegroundService : Service() {
     }
 
     private fun startAsForeground() {
-        val contentIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("课程提醒守护中")
-            .setContentText("正在后台守护课程闹钟，确保息屏也能准时提醒。")
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setOngoing(true)
-            .setShowWhen(false)
-            .setContentIntent(contentIntent)
-            .build()
+        val notification = buildForegroundNotification()
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
@@ -171,16 +161,54 @@ class AlarmForegroundService : Service() {
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
     }
 
+    private fun refreshForegroundNotification() {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, buildForegroundNotification())
+    }
+
+    private fun buildForegroundNotification(): android.app.Notification {
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val contentText = todayCourseText()
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
+            .setContentTitle("今日课程")
+            .setContentText(contentText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .setContentIntent(contentIntent)
+            .build()
+        return notification
+    }
+
+    private fun todayCourseText(): String {
+        return runCatching {
+            TodayCourseSummary.notificationText(
+                items = ScheduleRepository.load(applicationContext),
+                lessonTimes = ScheduleRepository.loadLessonTimes(applicationContext),
+                now = LocalDateTime.now()
+            )
+        }.getOrDefault("暂无未结束课程")
+    }
+
     private fun ensureChannel() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (manager.getNotificationChannel(CHANNEL_ID) == null) {
             manager.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "课程提醒守护",
+                    "今日课程",
                     NotificationManager.IMPORTANCE_MIN
                 ).apply {
-                    description = "常驻后台守护，确保息屏时也能准时提醒。"
+                    description = "显示今天最近一节尚未结束的课程。"
                     setShowBadge(false)
                 }
             )
@@ -199,7 +227,7 @@ class AlarmForegroundService : Service() {
 
     companion object {
         private const val TAG = "AlarmForegroundService"
-        private const val CHANNEL_ID = "lesson_alarm_guardian_v1"
+        private const val CHANNEL_ID = "today_course_foreground_v1"
         private const val NOTIFICATION_ID = 2100
         private const val WAKELOCK_TAG = "PinkSchedule:ForegroundGuardian"
         private const val CHECK_INTERVAL_MS = 30_000L

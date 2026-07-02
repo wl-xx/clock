@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.pinkschedule.data.ScheduleRepository
+import com.example.pinkschedule.data.ScheduleTransfer
 import com.example.pinkschedule.model.CourseItem
 import com.example.pinkschedule.model.LessonTimeSlot
 import com.example.pinkschedule.model.ReminderSettings
@@ -60,6 +61,10 @@ class ScheduleViewModel(
             notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
             fullScreenIntentPermissionGranted = SystemAlarmScheduler.canUseFullScreenIntent(context)
         )
+    }
+
+    fun clearMessage() {
+        _uiState.value = _uiState.value.copy(message = null)
     }
 
     fun upsertCourse(original: CourseItem?, edited: CourseItem): String? {
@@ -139,6 +144,32 @@ class ScheduleViewModel(
         }.onFailure {
             _uiState.value = _uiState.value.copy(message = "保存节次时间失败：${it.message ?: "未知错误"}")
         }
+    }
+
+    fun addLessonTime() {
+        val current = _uiState.value.lessonTimes.sortedBy { it.period }
+        val nextPeriod = (current.maxOfOrNull { it.period } ?: ScheduleDefaults.MIN_LESSON_COUNT) + 1
+        val previousEnd = current.lastOrNull()?.endTime ?: LocalTime.of(20, 40)
+        val startTime = previousEnd.plusMinutes(10)
+        val endTime = startTime.plusMinutes(45)
+        val updated = current
+            .plus(LessonTimeSlot(period = nextPeriod, startTime = startTime, endTime = endTime))
+            .sortedBy { it.period }
+        saveLessonTimes(updated, "已新增${nextPeriod}节课时间。")
+    }
+
+    fun deleteLessonTime(period: Int) {
+        val current = _uiState.value.lessonTimes.sortedBy { it.period }
+        if (period <= ScheduleDefaults.MIN_LESSON_COUNT || current.size <= ScheduleDefaults.MIN_LESSON_COUNT) {
+            _uiState.value = _uiState.value.copy(message = "课程时间最少保留 ${ScheduleDefaults.MIN_LESSON_COUNT} 节。")
+            return
+        }
+        if (_uiState.value.schedule.items.any { it.period == period }) {
+            _uiState.value = _uiState.value.copy(message = "第${period}节已有课程，不能删除该节次时间。")
+            return
+        }
+        val updated = current.filterNot { it.period == period }.sortedBy { it.period }
+        saveLessonTimes(updated, "已删除第${period}节课时间。")
     }
 
     fun updateReminderSettings(alarmModeEnabled: Boolean, minutesBefore: Int): ReminderSettingsAction {
@@ -289,6 +320,49 @@ class ScheduleViewModel(
         )
     }
 
+    fun exportScheduleJson(): String {
+        val state = _uiState.value
+        return ScheduleTransfer.toJson(state.schedule, state.lessonTimes)
+    }
+
+    fun importScheduleJson(raw: String): String? {
+        return runCatching {
+            val payload = ScheduleTransfer.fromJson(raw)
+            val normalizedItems = normalizeCourses(payload.schedule.items)
+            val lessonTimes = mergedLessonTimesFor(normalizedItems, payload.lessonTimes)
+            val schedule = WeeklySchedule(
+                teacher = payload.schedule.teacher.ifBlank { ScheduleDefaults.DEFAULT_TEACHER },
+                items = normalizedItems
+            )
+            ScheduleRepository.saveLessonTimes(context, lessonTimes)
+            ScheduleRepository.save(context, schedule)
+            ScheduleRepository.clearDeliveredAlarmSignatures(context)
+            ScheduleRepository.saveLastAlarmSignature(context, null)
+            val reminderSettings = _uiState.value.reminderSettings
+            val message = if (reminderSettings.alarmModeEnabled) {
+                refreshScheduledAlarms(
+                    schedule = schedule,
+                    lessonTimes = lessonTimes,
+                    settings = reminderSettings
+                ).message
+            } else {
+                "课程表已导入。"
+            }
+            syncLocalState(
+                schedule = schedule,
+                lessonTimes = lessonTimes,
+                reminderSettings = reminderSettings,
+                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
+                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
+                fullScreenIntentPermissionGranted = _uiState.value.fullScreenIntentPermissionGranted,
+                message = message
+            )
+            null
+        }.getOrElse {
+            "导入失败：${it.message ?: "文件格式不正确"}"
+        }
+    }
+
     private suspend fun hydrateLocalState() {
         val storedSchedule = withContext(Dispatchers.IO) {
             normalizeCourses(ScheduleRepository.load(context))
@@ -385,6 +459,34 @@ class ScheduleViewModel(
             lessonTimes = lessonTimes,
             settings = settings
         )
+    }
+
+    private fun saveLessonTimes(updated: List<LessonTimeSlot>, message: String?) {
+        runCatching {
+            ScheduleRepository.saveLessonTimes(context, updated)
+            ScheduleRepository.clearDeliveredAlarmSignatures(context)
+            ScheduleRepository.saveLastAlarmSignature(context, null)
+            val reminderSettings = _uiState.value.reminderSettings
+            syncLocalState(
+                schedule = _uiState.value.schedule,
+                lessonTimes = updated,
+                reminderSettings = reminderSettings,
+                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
+                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
+                fullScreenIntentPermissionGranted = _uiState.value.fullScreenIntentPermissionGranted,
+                message = if (reminderSettings.alarmModeEnabled) {
+                    refreshScheduledAlarms(
+                        schedule = _uiState.value.schedule,
+                        lessonTimes = updated,
+                        settings = reminderSettings
+                    ).message
+                } else {
+                    message
+                }
+            )
+        }.onFailure {
+            _uiState.value = _uiState.value.copy(message = "保存节次时间失败：${it.message ?: "未知错误"}")
+        }
     }
 
     private fun mergedLessonTimesFor(

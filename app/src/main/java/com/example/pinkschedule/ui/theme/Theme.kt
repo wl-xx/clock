@@ -1,7 +1,6 @@
 package com.example.pinkschedule.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -18,11 +17,11 @@ private val LightColors = lightColorScheme(
     onPrimary = SugarWhite,
     primaryContainer = BlossomPink,
     onPrimaryContainer = PlumText,
-    secondary = BerryPink,
-    onSecondary = SugarWhite,
-    secondaryContainer = SoftPeach,
+    secondary = SoftPeach,
+    onSecondary = PlumText,
+    secondaryContainer = Color(0xFFFFE9DD),
     onSecondaryContainer = PlumText,
-    tertiary = Color(0xFF7BC8A4),
+    tertiary = Color(0xFF5FB995),
     onTertiary = SugarWhite,
     background = CreamPink,
     onBackground = PlumText,
@@ -38,19 +37,13 @@ private val DarkColors = darkColorScheme(
     onPrimary = SugarWhite,
     secondary = SoftPeach,
     onSecondary = PlumText,
-    background = ColorTokens.darkBackground,
+    background = NightBerry,
     onBackground = SugarWhite,
-    surface = ColorTokens.darkSurface,
+    surface = NightPlum,
     onSurface = SugarWhite,
-    surfaceVariant = ColorTokens.darkCard,
+    surfaceVariant = NightCard,
     onSurfaceVariant = Color(0xFFF1D7E5)
 )
-
-private object ColorTokens {
-    val darkBackground = NightBerry
-    val darkSurface = NightPlum
-    val darkCard = NightCard
-}
 
 @Composable
 fun PinkScheduleTheme(

@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.pm.ServiceInfo
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Build
 import android.os.IBinder
@@ -14,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.example.pinkschedule.R
 import com.example.pinkschedule.data.ScheduleRepository
 import java.time.LocalDateTime
 
@@ -92,7 +94,8 @@ class AlarmRingingService : Service() {
 
             // 铃声与震动统一由 AlarmPlaybackManager 负责，通知本身不再触发第二路音源。
             val notification = NotificationCompat.Builder(this, AlarmReminderReceiver.CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
                 .setContentTitle("课程提醒")
                 .setContentText(detailText)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
@@ -192,7 +195,8 @@ class AlarmRingingService : Service() {
     private fun postStaticInfoNotification(className: String, detailText: String) {
         ensureStaticChannel()
         val notification = NotificationCompat.Builder(this, STATIC_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
             .setContentTitle("课程提醒（已关闭）")
             .setContentText(detailText.ifBlank { className })
             .setStyle(NotificationCompat.BigTextStyle().bigText(detailText.ifBlank { className }))

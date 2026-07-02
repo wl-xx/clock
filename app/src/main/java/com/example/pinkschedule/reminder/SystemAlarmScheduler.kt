@@ -64,7 +64,7 @@ object SystemAlarmScheduler {
             AlarmWatchdogWorker.enqueue(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            return AlarmResult(false, "没有可用于设置闹钟的后续课程。")
+            return AlarmResult(false, "暂无需要提醒的后续课程。")
         }
 
         // 一次性预排未来多节课程闹钟，每节使用独立 requestCode。
@@ -95,14 +95,9 @@ object SystemAlarmScheduler {
 
         val next = reminders.first()
         ScheduleRepository.saveLastAlarmSignature(context, next.signature())
-        val adjustmentText = if (next.triggerAdjustedToImmediate) {
-            "该节已错过提前提醒时间，已改为立即提醒。"
-        } else {
-            ""
-        }
         return AlarmResult(
             true,
-            "已预排最近 $scheduledCount 个课程闹钟，最近一节：${next.className} ${next.timeRange}。$adjustmentText"
+            "提醒已同步。"
         )
     }
 
