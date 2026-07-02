@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Local SDK / machine-specific settings
+local.properties
+
+# Android packaging outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Native build / caches
+.cxx/
+.externalNativeBuild/
+captures/
+
+# Logs
+*.log
+
+# Keystores and signing files
+*.jks
+*.keystore
+
+# Misc
+*.tmp
+*.swp
