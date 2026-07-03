@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,6 +50,8 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.ViewTimeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -106,7 +107,6 @@ import com.example.pinkschedule.reminder.SystemAlarmScheduler
 import com.example.pinkschedule.viewmodel.ScheduleViewModel
 import kotlinx.coroutines.delay
 import java.io.File
-import java.io.OutputStreamWriter
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -127,7 +127,11 @@ private enum class ScheduleViewMode {
 }
 
 @Composable
-fun PinkScheduleAppScreen(viewModel: ScheduleViewModel) {
+fun PinkScheduleAppScreen(
+    viewModel: ScheduleViewModel,
+    incomingImportIntent: Intent? = null,
+    onIncomingImportIntentConsumed: () -> Unit = {}
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scrollState = rememberScrollState()
@@ -141,21 +145,11 @@ fun PinkScheduleAppScreen(viewModel: ScheduleViewModel) {
     var errorDialogMessage by remember { mutableStateOf<String?>(null) }
     var settingsAlarmModeEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.alarmModeEnabled) }
     var settingsReminderMinutesText by rememberSaveable { mutableStateOf(uiState.reminderSettings.reminderMinutesBefore.toString()) }
-    val importScheduleLauncher = rememberLauncherForActivityResult(
+    val importDataLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let {
-            importScheduleFromUri(context = context, uri = it, onImport = viewModel::importScheduleJson)
-                ?.takeIf(::isErrorMessage)
-                ?.let { message -> errorDialogMessage = message }
-        }
-    }
-    val exportJsonLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        uri?.let {
-            exportScheduleJsonToUri(context = context, uri = it, json = viewModel.exportScheduleJson())
-                .takeIf(::isErrorMessage)
+            importDataFromUri(context = context, uri = it, onImport = viewModel::importDataJson)
                 ?.let { message -> errorDialogMessage = message }
         }
     }
@@ -168,6 +162,14 @@ fun PinkScheduleAppScreen(viewModel: ScheduleViewModel) {
         uiState.message
             ?.takeIf(::isErrorMessage)
             ?.let { errorDialogMessage = it }
+    }
+
+    LaunchedEffect(incomingImportIntent) {
+        incomingImportIntent?.let { intent ->
+            importDataFromIntent(context = context, intent = intent, onImport = viewModel::importDataJson)
+                ?.let { message -> errorDialogMessage = message }
+            onIncomingImportIntentConsumed()
+        }
     }
 
     Box(
@@ -204,10 +206,20 @@ fun PinkScheduleAppScreen(viewModel: ScheduleViewModel) {
                         selectedDay = managementDay,
                         onSelectDay = { managementDay = it },
                         onAddCourse = {
-                            addingCourseDay = DayOfWeek.of(managementDay)
-                            addingCourse = true
+                            if (uiState.lessonTimeProfiles.isEmpty() || uiState.lessonTimes.isEmpty()) {
+                                errorDialogMessage = "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
+                            } else {
+                                addingCourseDay = DayOfWeek.of(managementDay)
+                                addingCourse = true
+                            }
                         },
-                        onEditCourse = { editingCourse = it },
+                        onEditCourse = {
+                            if (uiState.lessonTimeProfiles.isEmpty() || uiState.lessonTimes.isEmpty()) {
+                                errorDialogMessage = "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
+                            } else {
+                                editingCourse = it
+                            }
+                        },
                         onDeleteCourse = viewModel::deleteCourse
                     )
                     AppPage.SETTINGS -> SettingsPage(
@@ -228,18 +240,13 @@ fun PinkScheduleAppScreen(viewModel: ScheduleViewModel) {
                         onRenameLessonTimeProfile = viewModel::renameLessonTimeProfile,
                         onDeleteLessonTimeProfiles = viewModel::deleteLessonTimeProfiles,
                         onSelectLessonTimeProfile = viewModel::selectLessonTimeProfile,
-                        exportLessonTimeProfilesJson = viewModel::exportLessonTimeProfilesJson,
-                        importLessonTimeProfileJson = viewModel::importLessonTimeProfileJson,
-                        onImportSchedule = {
-                            importScheduleLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                        onImportData = {
+                            importDataLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
                         },
-                        onExportJson = {
-                            exportJsonLauncher.launch("湘约一课课程表.json")
-                        },
-                        onShareScheduleJson = {
-                            shareScheduleJson(
+                        onExportData = {
+                            shareDataJson(
                                 context = context,
-                                json = viewModel.exportScheduleJson()
+                                json = viewModel.exportDataJson()
                             ).takeIf(::isErrorMessage)
                                 ?.let { message -> errorDialogMessage = message }
                         },
@@ -347,6 +354,7 @@ private fun SchedulePage(
     onToggleViewMode: () -> Unit
 ) {
     val weekdays = remember { buildWeekdays() }
+    val courseDays = remember(schedule.items) { schedule.items.map { it.dayOfWeek.value }.toSet() }
     val filteredCourses = schedule.items.filter { it.dayOfWeek.value == selectedDay }.sortedBy { it.period }
 
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -376,14 +384,14 @@ private fun SchedulePage(
             ) {
                 Icon(
                     imageVector = if (viewMode == ScheduleViewMode.TIMELINE) {
-                        Icons.Filled.CalendarMonth
+                        Icons.Filled.TableChart
                     } else {
-                        Icons.Filled.Schedule
+                        Icons.Filled.ViewTimeline
                     },
                     contentDescription = if (viewMode == ScheduleViewMode.TIMELINE) {
                         "切换为表格模式"
                     } else {
-                        "切换为列表模式"
+                        "切换为时间线模式"
                     },
                     tint = Color(0xFFE26786),
                     modifier = Modifier.size(24.dp)
@@ -391,7 +399,12 @@ private fun SchedulePage(
             }
         }
         if (viewMode == ScheduleViewMode.TIMELINE) {
-            WeekdayStrip(weekdays = weekdays, selectedDay = selectedDay, onSelectDay = onSelectDay)
+            WeekdayStrip(
+                weekdays = weekdays,
+                selectedDay = selectedDay,
+                courseDays = courseDays,
+                onSelectDay = onSelectDay
+            )
             CourseStatsRow(count = filteredCourses.size)
             if (filteredCourses.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -420,6 +433,7 @@ private fun SchedulePage(
 private fun WeekdayStrip(
     weekdays: List<WeekdayUiItem>,
     selectedDay: Int,
+    courseDays: Set<Int>,
     onSelectDay: (Int) -> Unit
 ) {
     Surface(
@@ -431,14 +445,19 @@ private fun WeekdayStrip(
         Row(modifier = Modifier.fillMaxWidth().padding(5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             weekdays.forEach { day ->
                 val selected = day.id == selectedDay
+                val hasCourse = day.id in courseDays
+                val themeColor = MaterialTheme.colorScheme.primary
+                val selectedContentColor = MaterialTheme.colorScheme.onPrimary
+                val dotShape = RoundedCornerShape(999.dp)
                 val dateColor = when {
-                    selected -> Color.White
-                    day.isToday -> Color(0xFFE86C8F)
+                    selected -> selectedContentColor
+                    day.isToday -> themeColor
                     else -> Color(0xFF8F878C)
                 }
+                val courseDotColor = if (hasCourse && !selected) themeColor else Color.Transparent
                 Surface(
                     shape = RoundedCornerShape(18.dp),
-                    color = if (selected) Color(0xFFE86C8F) else Color.Transparent,
+                    color = if (selected) themeColor else Color.Transparent,
                     shadowElevation = 0.dp,
                     modifier = Modifier
                         .weight(1f)
@@ -453,7 +472,7 @@ private fun WeekdayStrip(
                         Text(
                             day.short,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (selected) Color.White else Color(0xFF8F878C),
+                            color = if (selected) selectedContentColor else Color(0xFF8F878C),
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(Modifier.height(3.dp))
@@ -462,6 +481,12 @@ private fun WeekdayStrip(
                             style = MaterialTheme.typography.labelMedium,
                             color = dateColor,
                             fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(4.dp)
+                                .background(courseDotColor, dotShape)
                         )
                     }
                 }
@@ -491,7 +516,7 @@ private fun CourseTimelineItem(
     val timeText = slot?.displayRange().orEmpty()
     val isCompletedToday = course.dayOfWeek == LocalDate.now().dayOfWeek &&
         slot?.endTime?.isBefore(LocalTime.now()) == true
-    val accent = if (isCompletedToday) Color(0xFFD7CCC8) else courseAccentColor(course.period)
+    val accent = if (isCompletedToday) Color(0xFFD7CCC8) else courseAccentColor()
     val cardColor = if (isCompletedToday) Color.White.copy(alpha = 0.48f) else Color.White.copy(alpha = 0.82f)
     val timeColor = if (isCompletedToday) Color(0xFFB8AFAE) else Color(0xFF8E7975)
     val titleColor = if (isCompletedToday) Color(0xFF9B8F8C) else Color(0xFF4B2F2C)
@@ -746,6 +771,7 @@ private fun CourseManagementPage(
     onDeleteCourse: (CourseItem) -> Unit
 ) {
     val weekdays = remember { buildWeekdays() }
+    val courseDays = remember(schedule.items) { schedule.items.map { it.dayOfWeek.value }.toSet() }
     val day = DayOfWeek.of(selectedDay)
     val grouped = schedule.items.groupBy { it.dayOfWeek }
     val dayItems = grouped[day].orEmpty().sortedWith(compareBy({ it.period }, { it.className }))
@@ -759,7 +785,12 @@ private fun CourseManagementPage(
             fontWeight = FontWeight.Black
         )
 
-        WeekdayStrip(weekdays = weekdays, selectedDay = selectedDay, onSelectDay = onSelectDay)
+        WeekdayStrip(
+            weekdays = weekdays,
+            selectedDay = selectedDay,
+            courseDays = courseDays,
+            onSelectDay = onSelectDay
+        )
         CourseStatsRow(count = dayItems.size) {
             CompactAddButton(onClick = onAddCourse)
         }
@@ -841,7 +872,7 @@ private fun EditableCourseRow(
     onDelete: () -> Unit
 ) {
     val timeText = lessonTimes.firstOrNull { it.period == item.period }?.displayRange().orEmpty()
-    val accent = courseAccentColor(item.period)
+    val accent = courseAccentColor()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
             Box(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(999.dp)).background(accent))
@@ -931,18 +962,14 @@ private fun AppErrorDialog(
     onDismiss: () -> Unit
 ) {
     val isPermissionGuide = isPermissionGuideMessage(message)
-    val isImportNotice = message.contains("已移除")
+    val title = dialogTitleForMessage(message, isPermissionGuide)
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
         containerColor = Color(0xFFFFFCFA),
         title = {
             Text(
-                text = when {
-                    isPermissionGuide -> "请先完成权限设置"
-                    isImportNotice -> "导入提示"
-                    else -> "出错了"
-                },
+                text = title,
                 style = MaterialTheme.typography.titleLarge,
                 color = Color(0xFF202023),
                 fontWeight = FontWeight.Black
@@ -986,11 +1013,8 @@ private fun SettingsPage(
     onRenameLessonTimeProfile: (String, String) -> Unit,
     onDeleteLessonTimeProfiles: (Set<String>) -> Unit,
     onSelectLessonTimeProfile: (String) -> Unit,
-    exportLessonTimeProfilesJson: (Set<String>) -> String,
-    importLessonTimeProfileJson: (String, String, String) -> String?,
-    onImportSchedule: () -> Unit,
-    onExportJson: () -> Unit,
-    onShareScheduleJson: () -> Unit,
+    onImportData: () -> Unit,
+    onExportData: () -> Unit,
     onShareScheduleImage: () -> Unit,
     onErrorMessage: (String) -> Unit,
     onRefreshPermission: () -> Unit
@@ -1015,33 +1039,7 @@ private fun SettingsPage(
     var activeSettingsPanel by rememberSaveable { mutableStateOf<String?>(null) }
     var permissionBackTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedLessonTimeProfileId by rememberSaveable { mutableStateOf(activeLessonTimeProfileId) }
-    var lessonTimeExportTargetIds by rememberSaveable { mutableStateOf(listOf(activeLessonTimeProfileId)) }
     var draftLessonTimeProfile by remember { mutableStateOf<LessonTimeProfile?>(null) }
-    var showShareScheduleDialog by remember { mutableStateOf(false) }
-    val importLessonTimeProfileLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri?.let {
-            importLessonTimeProfileFromUri(
-                context = context,
-                uri = it,
-                onImport = { raw, fileName -> importLessonTimeProfileJson(raw, "", fileName) }
-            )?.takeIf(::isErrorMessage)
-                ?.let(onErrorMessage)
-        }
-    }
-    val exportLessonTimeProfileLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        uri?.let {
-            exportScheduleJsonToUri(
-                context = context,
-                uri = it,
-                json = exportLessonTimeProfilesJson(lessonTimeExportTargetIds.toSet())
-            ).takeIf(::isErrorMessage)
-                ?.let(onErrorMessage)
-        }
-    }
 
     fun refreshManualPermissionState() {
         onRefreshPermission()
@@ -1059,7 +1057,6 @@ private fun SettingsPage(
             "time-current" -> "time"
             "time-edit" -> "time-edit-list"
             "time-edit-list" -> "time"
-            "time-export" -> "time"
             "alarm", "time" -> null
             else -> null
         }
@@ -1073,8 +1070,6 @@ private fun SettingsPage(
         if (!selectedIsDraft && lessonTimeProfiles.none { it.id == selectedLessonTimeProfileId }) {
             selectedLessonTimeProfileId = activeLessonTimeProfileId
         }
-        val validExportIds = lessonTimeExportTargetIds.filter { id -> lessonTimeProfiles.any { it.id == id } }
-        lessonTimeExportTargetIds = validExportIds.ifEmpty { listOf(activeLessonTimeProfileId) }
     }
 
     BackHandler(enabled = activeSettingsPanel != null) {
@@ -1191,7 +1186,6 @@ private fun SettingsPage(
                 "time-current" -> "设置当前作息表"
                 "time-edit-list" -> "编辑作息表"
                 "time-edit" -> if (draftLessonTimeProfile?.id == selectedLessonTimeProfileId) "新增作息表" else "编辑作息时间"
-                "time-export" -> "导出作息表"
                 else -> "设置"
             },
             showBack = activeSettingsPanel != null,
@@ -1222,18 +1216,18 @@ private fun SettingsPage(
                     )
                     SettingsListRow(
                         icon = Icons.Filled.FileUpload,
-                        title = "导入课程表",
-                        onClick = onImportSchedule
+                        title = "导入数据",
+                        onClick = onImportData
                     )
                     SettingsListRow(
                         icon = Icons.Filled.FileDownload,
-                        title = "导出课程表",
-                        onClick = onExportJson
+                        title = "导出数据",
+                        onClick = onExportData
                     )
                     SettingsListRow(
                         icon = Icons.Filled.Share,
                         title = "分享课程表",
-                        onClick = { showShareScheduleDialog = true }
+                        onClick = onShareScheduleImage
                     )
                 }
             }
@@ -1291,11 +1285,7 @@ private fun SettingsPage(
                 RestScheduleSettingsPage(
                     onViewSchedules = { activeSettingsPanel = "time-view-list" },
                     onSetCurrentSchedule = { activeSettingsPanel = "time-current" },
-                    onEditSchedules = { activeSettingsPanel = "time-edit-list" },
-                    onImportSchedule = {
-                        importLessonTimeProfileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-                    },
-                    onExportSchedules = { activeSettingsPanel = "time-export" }
+                    onEditSchedules = { activeSettingsPanel = "time-edit-list" }
                 )
             }
             "time-current" -> {
@@ -1374,98 +1364,7 @@ private fun SettingsPage(
                     context = context
                 )
             }
-            "time-export" -> {
-                RestScheduleExportPage(
-                    profiles = lessonTimeProfiles,
-                    exportProfileIds = lessonTimeExportTargetIds.toSet(),
-                    onExportProfileToggled = { profileId ->
-                        lessonTimeExportTargetIds = if (lessonTimeExportTargetIds.contains(profileId)) {
-                            lessonTimeExportTargetIds.filterNot { it == profileId }
-                        } else {
-                            lessonTimeExportTargetIds + profileId
-                        }
-                    },
-                    onExportAllChanged = { checked ->
-                        lessonTimeExportTargetIds = if (checked) {
-                            lessonTimeProfiles.map { it.id }
-                        } else {
-                            emptyList()
-                        }
-                    },
-                    onExport = {
-                        val selectedProfiles = lessonTimeProfiles.filter { it.id in lessonTimeExportTargetIds }
-                            .ifEmpty { lessonTimeProfiles }
-                        val name = lessonTimeProfilesExportName(selectedProfiles)
-                        exportLessonTimeProfileLauncher.launch("$name.json")
-                    },
-                    onShare = {
-                        val selectedProfiles = lessonTimeProfiles.filter { it.id in lessonTimeExportTargetIds }
-                            .ifEmpty { lessonTimeProfiles }
-                        shareLessonTimeProfilesJson(
-                            context = context,
-                            fileName = lessonTimeProfilesExportName(selectedProfiles),
-                            json = exportLessonTimeProfilesJson(lessonTimeExportTargetIds.toSet())
-                        ).takeIf(::isErrorMessage)
-                            ?.let(onErrorMessage)
-                    }
-                )
-            }
         }
-    }
-
-    if (showShareScheduleDialog) {
-        AlertDialog(
-            onDismissRequest = { showShareScheduleDialog = false },
-            shape = RoundedCornerShape(24.dp),
-            containerColor = Color(0xFFFFFCFA),
-            title = {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "分享课程表",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color(0xFF202023),
-                        fontWeight = FontWeight.Black,
-                        modifier = Modifier.align(Alignment.CenterStart)
-                    )
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(999.dp))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                showShareScheduleDialog = false
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        ThinCloseIcon(modifier = Modifier.size(18.dp), color = Color(0xFF8F878C))
-                    }
-                }
-            },
-            text = { Text("选择分享 JSON 文件或课程表图片。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showShareScheduleDialog = false
-                        onShareScheduleImage()
-                    }
-                ) {
-                    Text("图片", color = Color(0xFFE26786))
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showShareScheduleDialog = false
-                        onShareScheduleJson()
-                    }
-                ) {
-                    Text("JSON", color = Color(0xFFE26786))
-                }
-            }
-        )
     }
 }
 
@@ -1473,9 +1372,7 @@ private fun SettingsPage(
 private fun RestScheduleSettingsPage(
     onViewSchedules: () -> Unit,
     onSetCurrentSchedule: () -> Unit,
-    onEditSchedules: () -> Unit,
-    onImportSchedule: () -> Unit,
-    onExportSchedules: () -> Unit
+    onEditSchedules: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
@@ -1484,10 +1381,6 @@ private fun RestScheduleSettingsPage(
             SettingsListRow(Icons.Filled.CheckCircle, "设置当前作息表", onClick = onSetCurrentSchedule)
             HorizontalDivider(color = Color(0xFFF3E4DE))
             SettingsListRow(Icons.Filled.Edit, "编辑作息表", onClick = onEditSchedules)
-            HorizontalDivider(color = Color(0xFFF3E4DE))
-            SettingsListRow(Icons.Filled.FileUpload, "导入作息表", onClick = onImportSchedule)
-            HorizontalDivider(color = Color(0xFFF3E4DE))
-            SettingsListRow(Icons.Filled.FileDownload, "导出作息表", onClick = onExportSchedules)
         }
     }
 }
@@ -1715,9 +1608,11 @@ private fun nextLessonTimeSlot(slots: List<LessonTimeSlot>, type: AddLessonTimeT
                 ?: ScheduleDefaults.defaultLessonTimeSlotFor(ScheduleDefaults.EARLY_STUDY_PERIOD)
         }
         AddLessonTimeType.LATE_STUDY -> {
-            sorted.firstOrNull { ScheduleDefaults.isLateStudyPeriod(ScheduleDefaults.normalizePeriod(it.period)) }
-                ?.copy(period = ScheduleDefaults.LATE_STUDY_PERIOD_BASE)
-                ?: ScheduleDefaults.defaultLessonTimeSlotFor(ScheduleDefaults.LATE_STUDY_PERIOD_BASE)
+            val lateSlots = sorted.filter { ScheduleDefaults.isLateStudyPeriod(it.period) }
+            val nextPeriod = (lateSlots.maxOfOrNull { it.period } ?: (ScheduleDefaults.LATE_STUDY_PERIOD_BASE - 1)) + 1
+            val startTime = lateSlots.lastOrNull()?.endTime?.plusMinutes(10)
+                ?: ScheduleDefaults.defaultLessonTimeSlotFor(ScheduleDefaults.LATE_STUDY_PERIOD_BASE).startTime
+            LessonTimeSlot(nextPeriod, startTime, startTime.plusMinutes(45))
         }
         AddLessonTimeType.COURSE -> {
             val regularSlots = sorted.filter { ScheduleDefaults.isRegularCoursePeriod(it.period) }
@@ -1730,7 +1625,7 @@ private fun nextLessonTimeSlot(slots: List<LessonTimeSlot>, type: AddLessonTimeT
 }
 
 private fun upsertLessonTimeSlot(slots: List<LessonTimeSlot>, slot: LessonTimeSlot): List<LessonTimeSlot> {
-    return (slots.filterNot { ScheduleDefaults.normalizePeriod(it.period) == slot.period } + slot).sortedBy { it.period }
+    return (slots.filterNot { it.period == slot.period } + slot).sortedBy { it.period }
 }
 
 private fun replaceLessonTimeSlot(
@@ -1801,8 +1696,8 @@ private fun LessonTimeEditPage(
         }
         localErrorText = null
         val targetSlot = nextLessonTimeSlot(editingLessonTimes, type).copy(startTime = start, endTime = end)
-        if (type != AddLessonTimeType.COURSE &&
-            editingLessonTimes.any { ScheduleDefaults.normalizePeriod(it.period) == targetSlot.period }
+        if (type == AddLessonTimeType.EARLY_STUDY &&
+            editingLessonTimes.any { it.period == targetSlot.period }
         ) {
             pendingSelfStudyOverwrite = type to targetSlot
             showAddLessonTimeDialog = false
@@ -2049,100 +1944,6 @@ private fun LessonTimeEditPage(
                     Text("取消", color = Color(0xFF8F878C))
                 }
             }
-        )
-    }
-}
-
-@Composable
-private fun RestScheduleExportPage(
-    profiles: List<LessonTimeProfile>,
-    exportProfileIds: Set<String>,
-    onExportProfileToggled: (String) -> Unit,
-    onExportAllChanged: (Boolean) -> Unit,
-    onExport: () -> Unit,
-    onShare: () -> Unit
-) {
-    val allSelected = profiles.isNotEmpty() && exportProfileIds.containsAll(profiles.map { it.id })
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-        SettingsListGroup {
-            Text(
-                text = "选择要导出的作息表",
-                style = MaterialTheme.typography.titleMedium,
-                color = Color(0xFF303036),
-                fontWeight = FontWeight.Normal,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-            LessonTimeProfileCheckRow(
-                title = "全选",
-                checked = allSelected,
-                onCheckedChange = onExportAllChanged
-            )
-            HorizontalDivider(color = Color(0xFFF3E4DE))
-            profiles.forEachIndexed { index, profile ->
-                LessonTimeProfileCheckRow(
-                    title = profile.name,
-                    checked = profile.id in exportProfileIds,
-                    onCheckedChange = { onExportProfileToggled(profile.id) }
-                )
-                if (index != profiles.lastIndex) {
-                    HorizontalDivider(color = Color(0xFFF3E4DE))
-                }
-            }
-            OutlinedButton(
-                onClick = onExport,
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
-                enabled = exportProfileIds.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-            ) {
-                Text("导出作息表", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
-            }
-            Button(
-                onClick = onShare,
-                enabled = exportProfileIds.isNotEmpty(),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp)
-            ) {
-                Text("分享作息表", fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-@Composable
-private fun LessonTimeProfileCheckRow(
-    title: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                onCheckedChange(!checked)
-            }
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = Color(0xFF303036),
-            fontWeight = FontWeight.Normal
-        )
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = CheckboxDefaults.colors(
-                checkedColor = Color(0xFFE26786),
-                uncheckedColor = Color(0xFFB8B1B5),
-                checkmarkColor = Color.White
-            )
         )
     }
 }
@@ -2949,7 +2750,16 @@ private fun isPermissionGuideMessage(message: String): Boolean {
     return keywords.any { message.contains(it) }
 }
 
-private fun importScheduleFromUri(
+private fun dialogTitleForMessage(message: String, isPermissionGuide: Boolean): String {
+    return when {
+        isPermissionGuide -> "请先完成权限设置"
+        message.startsWith("导入失败") -> "导入失败"
+        message.contains("数据已导入") || message.contains("已移除") -> "导入成功"
+        else -> "出错了"
+    }
+}
+
+private fun importDataFromUri(
     context: Context,
     uri: Uri,
     onImport: (String) -> String?
@@ -2968,72 +2778,94 @@ private fun importScheduleFromUri(
     }
 }
 
-private fun importLessonTimeProfileFromUri(
+private fun importDataFromIntent(
     context: Context,
-    uri: Uri,
-    onImport: (String, String) -> String?
+    intent: Intent,
+    onImport: (String) -> String?
 ): String? {
     return runCatching {
-        val raw = context.contentResolver.openInputStream(uri)?.use { input ->
-            input.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        }.orEmpty()
+        val raw = readImportTextsFromIntent(context, intent).firstOrNull { it.isNotBlank() }.orEmpty()
         if (raw.isBlank()) {
-            "导入失败：文件为空。"
+            "导入失败：未找到可导入的数据文件或文本。"
         } else {
-            onImport(raw, displayNameWithoutExtension(context, uri))
+            onImport(raw)
         }
     }.getOrElse {
-        "导入失败：${it.message ?: "无法读取文件"}"
+        "导入失败：${it.message ?: "无法读取微信数据"}"
     }
 }
 
-private fun displayNameWithoutExtension(context: Context, uri: Uri): String {
-    val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                cursor.getString(0)
-            } else {
-                null
+private fun readImportTextsFromIntent(context: Context, intent: Intent): List<String> {
+    val seenUris = linkedSetOf<Uri>()
+    return buildList {
+        intent.getStringExtra(Intent.EXTRA_TEXT)?.let { add(it) }
+
+        intent.streamUris().forEach { uri ->
+            addImportTextFromUri(context, uri, seenUris)
+        }
+
+        intent.data?.let { uri ->
+            addImportTextFromUri(context, uri, seenUris)
+        }
+
+        val clipData = intent.clipData
+        if (clipData != null) {
+            for (index in 0 until clipData.itemCount) {
+                val item = clipData.getItemAt(index)
+                item.text?.toString()?.let { add(it) }
+                item.uri?.let { uri ->
+                    addImportTextFromUri(context, uri, seenUris)
+                }
             }
         }
-        ?: uri.lastPathSegment.orEmpty()
-    return displayName.substringBeforeLast('.', displayName).ifBlank { "导入作息表" }
+    }
 }
 
-private fun exportScheduleJsonToUri(
+private fun MutableList<String>.addImportTextFromUri(
     context: Context,
     uri: Uri,
-    json: String
-): String {
-    return runCatching {
-        context.contentResolver.openOutputStream(uri)?.use { output ->
-            OutputStreamWriter(output, Charsets.UTF_8).use { writer ->
-                writer.write(json)
-            }
-        } ?: error("无法写入文件")
-        "JSON 课程表已导出。"
-    }.getOrElse {
-        "导出失败：${it.message ?: "无法写入文件"}"
+    seenUris: MutableSet<Uri>
+) {
+    if (!seenUris.add(uri)) return
+    val raw = context.contentResolver.openInputStream(uri)?.use { input ->
+        input.bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }.orEmpty()
+    if (raw.isNotBlank()) {
+        add(raw)
     }
 }
 
-private fun lessonTimeProfilesExportName(profiles: List<LessonTimeProfile>): String {
-    val rawName = if (profiles.size == 1) {
-        profiles.first().name
+private fun Intent.streamUris(): List<Uri> {
+    val single = streamUri()
+    val multiple = streamUriList()
+    return (listOfNotNull(single) + multiple).distinct()
+}
+
+private fun Intent.streamUri(): Uri? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
     } else {
-        "全部作息表"
+        @Suppress("DEPRECATION")
+        getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
     }
-    return rawName.replace(Regex("""[\\/:*?"<>|]"""), "_").ifBlank { "作息表" }
 }
 
-private fun shareLessonTimeProfilesJson(
+private fun Intent.streamUriList(): List<Uri> {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+    } else {
+        @Suppress("DEPRECATION")
+        getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+    }
+}
+
+private fun shareDataJson(
     context: Context,
-    fileName: String,
     json: String
 ): String {
     return runCatching {
         val exportDir = File(context.cacheDir, "schedule_exports").apply { mkdirs() }
-        val file = File(exportDir, "$fileName.json")
+        val file = File(exportDir, "湘约一课数据.json")
         file.writeText(json, Charsets.UTF_8)
         val uri = FileProvider.getUriForFile(
             context,
@@ -3048,36 +2880,9 @@ private fun shareLessonTimeProfilesJson(
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(shareIntent, "选择微信或 QQ"))
-        "已生成作息表文件，请选择微信或 QQ 发送。"
+        "已生成数据文件，请选择微信或 QQ 发送。"
     }.getOrElse {
-        "分享作息表失败：${it.message ?: "无法生成文件"}"
-    }
-}
-
-private fun shareScheduleJson(
-    context: Context,
-    json: String
-): String {
-    return runCatching {
-        val exportDir = File(context.cacheDir, "schedule_exports").apply { mkdirs() }
-        val file = File(exportDir, "湘约一课课程表.json")
-        file.writeText(json, Charsets.UTF_8)
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/json"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, file.name)
-            clipData = ClipData.newUri(context.contentResolver, file.name, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(shareIntent, "选择微信或 QQ"))
-        "已生成课程表 JSON 文件，请选择微信或 QQ 发送。"
-    }.getOrElse {
-        "分享课程表失败：${it.message ?: "无法生成文件"}"
+        "导出数据失败：${it.message ?: "无法生成文件"}"
     }
 }
 
@@ -3107,12 +2912,7 @@ private fun shareScheduleImage(
 
 private fun dayLabel(day: DayOfWeek): String = day.getDisplayName(TextStyle.FULL, Locale.CHINA)
 private fun slotLabel(period: Int): String = ScheduleDefaults.periodLabel(period)
-private fun courseAccentColor(period: Int): Color {
-    return when ((period - 1).mod(4)) {
-        0 -> Color(0xFFE26786)
-        1 -> Color(0xFFF7B36A)
-        2 -> Color(0xFF59B995)
-        else -> Color(0xFFC7A4FF)
-    }
+private fun courseAccentColor(): Color {
+    return Color(0xFFE26786)
 }
 private val HH_MM: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")

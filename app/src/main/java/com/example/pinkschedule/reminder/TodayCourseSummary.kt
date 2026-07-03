@@ -16,7 +16,7 @@ object TodayCourseSummary {
             val status = if (summary.started) {
                 "正在上课"
             } else {
-                "还有${formatMinutes(summary.minutesUntilStart)}"
+                "倒计时${formatDuration(summary.millisUntilStart)}"
             }
             listOf(
                 status,
@@ -61,15 +61,15 @@ object TodayCourseSummary {
             ?.withNow(now)
     }
 
-    private fun formatMinutes(rawMinutes: Long): String {
-        val minutes = rawMinutes.coerceAtLeast(0)
-        if (minutes < 60) return "${minutes}分钟"
-        val hours = minutes / 60
-        val remainingMinutes = minutes % 60
-        return if (remainingMinutes == 0L) {
-            "${hours}小时"
+    private fun formatDuration(rawMillis: Long): String {
+        val totalSeconds = (rawMillis.coerceAtLeast(0) + 999) / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return if (hours > 0) {
+            "%d:%02d:%02d".format(hours, minutes, seconds)
         } else {
-            "${hours}小时${remainingMinutes}分钟"
+            "%02d:%02d".format(minutes, seconds)
         }
     }
 
@@ -79,7 +79,7 @@ object TodayCourseSummary {
         val startAt: LocalDateTime,
         val endAt: LocalDateTime,
         val started: Boolean = false,
-        val minutesUntilStart: Long = 0
+        val millisUntilStart: Long = 0
     ) {
         fun startedAt(now: LocalDateTime): Boolean = !now.isBefore(startAt) && !now.isAfter(endAt)
 
@@ -87,7 +87,7 @@ object TodayCourseSummary {
             val isStarted = startedAt(now)
             return copy(
                 started = isStarted,
-                minutesUntilStart = if (isStarted) 0 else Duration.between(now, startAt).toMinutes()
+                millisUntilStart = if (isStarted) 0 else Duration.between(now, startAt).toMillis()
             )
         }
     }

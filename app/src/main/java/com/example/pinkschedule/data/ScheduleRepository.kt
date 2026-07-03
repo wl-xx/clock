@@ -25,15 +25,18 @@ object ScheduleRepository {
     private const val KEY_AUTO_START_PROMPTED = "auto_start_prompted"
 
     fun save(context: Context, schedule: WeeklySchedule) {
-        val serialized = schedule.items.joinToString("\n") { item ->
-            listOf(
-                item.teacher,
-                item.className,
-                item.dayOfWeek.name,
-                item.period.toString(),
-                item.courseName
-            ).joinToString("|") { escape(it) }
-        }
+        val serialized = JSONArray().apply {
+            schedule.items.forEach { item ->
+                put(
+                    JSONObject()
+                        .put("teacher", item.teacher)
+                        .put("courseName", item.courseName)
+                        .put("className", item.className)
+                        .put("dayOfWeek", item.dayOfWeek.name)
+                        .put("period", item.period)
+                )
+            }
+        }.toString()
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_SCHEDULE, serialized)
@@ -43,19 +46,25 @@ object ScheduleRepository {
     fun load(context: Context): List<CourseItem> {
         val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_SCHEDULE, null) ?: return emptyList()
-        return raw.lineSequence().mapNotNull { line ->
-            val parts = splitEscaped(line)
-            if (parts.size < 4) return@mapNotNull null
-            val dayOfWeek = runCatching { DayOfWeek.valueOf(parts[2]) }.getOrNull() ?: return@mapNotNull null
-            val period = parts[3].toIntOrNull() ?: return@mapNotNull null
-            CourseItem(
-                teacher = parts[0],
-                className = parts[1],
-                dayOfWeek = dayOfWeek,
-                period = ScheduleDefaults.normalizePeriod(period),
-                courseName = parts.getOrNull(4).orEmpty().ifBlank { ScheduleDefaults.DEFAULT_COURSE_NAME }
-            )
-        }.toList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val dayOfWeek = runCatching { DayOfWeek.valueOf(item.optString("dayOfWeek")) }.getOrNull() ?: continue
+                    val period = item.optInt("period", -1).takeIf { it >= 0 } ?: continue
+                    add(
+                        CourseItem(
+                            teacher = item.optString("teacher").ifBlank { ScheduleDefaults.DEFAULT_TEACHER },
+                            className = item.optString("className"),
+                            dayOfWeek = dayOfWeek,
+                            period = period,
+                            courseName = item.optString("courseName").ifBlank { ScheduleDefaults.DEFAULT_COURSE_NAME }
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
     }
 
     fun saveLessonTimes(context: Context, lessonTimes: List<LessonTimeSlot>) {
@@ -77,7 +86,7 @@ object ScheduleRepository {
             .firstOrNull { it.id == activeId }
             ?.slots
             ?.sortedBy { it.period }
-            ?: ScheduleDefaults.defaultLessonTimeSlots()
+            ?: emptyList()
     }
 
     fun saveLessonTimeProfiles(
@@ -87,14 +96,14 @@ object ScheduleRepository {
     ) {
         val normalized = normalizeProfiles(profiles)
         val resolvedActiveId = normalized.firstOrNull { it.id == activeProfileId }?.id
-            ?: normalized.first().id
+            ?: normalized.firstOrNull()?.id.orEmpty()
         val serialized = JSONArray().apply {
             normalized.forEach { profile ->
                 put(
                     JSONObject()
                         .put("id", profile.id)
                         .put("name", profile.name)
-                        .put("slots", lessonTimesToJson(profile.slots))
+                        .put("lessonTimes", lessonTimesToJson(profile.slots))
                 )
             }
         }.toString()
@@ -112,22 +121,17 @@ object ScheduleRepository {
         if (parsed.isNotEmpty()) {
             return normalizeProfiles(parsed)
         }
-        val defaultProfile = ScheduleDefaults.defaultLessonTimeProfile()
-        saveLessonTimeProfiles(context, listOf(defaultProfile), defaultProfile.id)
-        return listOf(defaultProfile)
+        return emptyList()
     }
 
     fun loadActiveLessonTimeProfileId(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(
-            KEY_ACTIVE_LESSON_TIME_PROFILE_ID,
-            ScheduleDefaults.DEFAULT_LESSON_TIME_PROFILE_ID
-        ) ?: ScheduleDefaults.DEFAULT_LESSON_TIME_PROFILE_ID
+        return prefs.getString(KEY_ACTIVE_LESSON_TIME_PROFILE_ID, "") ?: ""
     }
 
     fun setActiveLessonTimeProfileId(context: Context, profileId: String) {
         val profiles = loadLessonTimeProfiles(context)
-        val resolvedId = profiles.firstOrNull { it.id == profileId }?.id ?: profiles.first().id
+        val resolvedId = profiles.firstOrNull { it.id == profileId }?.id ?: profiles.firstOrNull()?.id.orEmpty()
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_ACTIVE_LESSON_TIME_PROFILE_ID, resolvedId)
@@ -163,7 +167,7 @@ object ScheduleRepository {
                     val item = array.optJSONObject(index) ?: continue
                     val id = item.optString("id").ifBlank { UUID.randomUUID().toString() }
                     val name = item.optString("name").ifBlank { "作息表 ${index + 1}" }
-                    val slots = parseLessonTimesJson(item.optJSONArray("slots"))
+                    val slots = parseLessonTimesJson(item.optJSONArray("lessonTimes"))
                     add(LessonTimeProfile(id = id, name = name, slots = slots))
                 }
             }
@@ -186,9 +190,7 @@ object ScheduleRepository {
     }
 
     private fun normalizeProfiles(profiles: List<LessonTimeProfile>): List<LessonTimeProfile> {
-        val fallback = ScheduleDefaults.defaultLessonTimeProfile()
         val normalized = profiles
-            .ifEmpty { listOf(fallback) }
             .mapIndexed { index, profile ->
                 val name = profile.name.ifBlank { "作息表 ${index + 1}" }
                 val slots = profile.slots
@@ -203,7 +205,7 @@ object ScheduleRepository {
                 )
             }
             .distinctBy { it.id }
-        return normalized.ifEmpty { listOf(fallback) }
+        return normalized
     }
 
     fun saveReminderSettings(context: Context, settings: ReminderSettings) {
@@ -279,32 +281,4 @@ object ScheduleRepository {
             .apply()
     }
 
-    private fun escape(value: String): String {
-        return value.replace("\\", "\\\\").replace("|", "\\|")
-    }
-
-    private fun splitEscaped(line: String): List<String> {
-        val parts = mutableListOf<String>()
-        val current = StringBuilder()
-        var escaping = false
-        line.forEach { ch ->
-            when {
-                escaping -> {
-                    current.append(ch)
-                    escaping = false
-                }
-                ch == '\\' -> escaping = true
-                ch == '|' -> {
-                    parts += current.toString()
-                    current.clear()
-                }
-                else -> current.append(ch)
-            }
-        }
-        if (escaping) {
-            current.append('\\')
-        }
-        parts += current.toString()
-        return parts
-    }
 }

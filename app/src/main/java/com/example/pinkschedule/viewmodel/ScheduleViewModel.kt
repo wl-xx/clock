@@ -4,8 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.pinkschedule.data.ScheduleRepository
-import com.example.pinkschedule.data.ScheduleTransfer
-import com.example.pinkschedule.data.LessonTimeProfilesTransfer
+import com.example.pinkschedule.data.AppDataTransfer
 import com.example.pinkschedule.model.CourseItem
 import com.example.pinkschedule.model.LessonTimeProfile
 import com.example.pinkschedule.model.LessonTimeSlot
@@ -34,9 +33,9 @@ data class ScheduleUiState(
         teacher = ScheduleDefaults.DEFAULT_TEACHER,
         items = emptyList()
     ),
-    val lessonTimes: List<LessonTimeSlot> = ScheduleDefaults.defaultLessonTimeSlots(),
-    val lessonTimeProfiles: List<LessonTimeProfile> = listOf(ScheduleDefaults.defaultLessonTimeProfile()),
-    val activeLessonTimeProfileId: String = ScheduleDefaults.DEFAULT_LESSON_TIME_PROFILE_ID,
+    val lessonTimes: List<LessonTimeSlot> = emptyList(),
+    val lessonTimeProfiles: List<LessonTimeProfile> = emptyList(),
+    val activeLessonTimeProfileId: String = "",
     val reminderSettings: ReminderSettings = ReminderSettings(),
     val exactAlarmPermissionGranted: Boolean = true,
     val notificationPermissionGranted: Boolean = true,
@@ -69,8 +68,14 @@ class ScheduleViewModel(
     }
 
     fun upsertCourse(original: CourseItem?, edited: CourseItem): String? {
+        if (_uiState.value.lessonTimeProfiles.isEmpty() || _uiState.value.lessonTimes.isEmpty()) {
+            return "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
+        }
         val currentItems = _uiState.value.schedule.items.toMutableList()
         val normalized = edited.copy(period = ScheduleDefaults.normalizePeriod(edited.period))
+        if (_uiState.value.lessonTimes.none { it.period == normalized.period }) {
+            return "当前作息表未设置${ScheduleDefaults.periodLabel(normalized.period)}，请先设置作息时间。"
+        }
         val conflictingItem = currentItems.firstOrNull { item ->
             item != original &&
                 item.dayOfWeek == normalized.dayOfWeek &&
@@ -285,53 +290,55 @@ class ScheduleViewModel(
         )
     }
 
-    fun exportScheduleJson(): String {
+    fun exportDataJson(): String {
         val state = _uiState.value
-        return ScheduleTransfer.toJson(state.schedule)
+        return AppDataTransfer.toJson(
+            schedule = state.schedule,
+            profiles = state.lessonTimeProfiles,
+            activeProfileId = state.activeLessonTimeProfileId
+        )
     }
 
-    fun importScheduleJson(raw: String): String? {
+    fun importDataJson(raw: String): String? {
         return runCatching {
-            val payload = ScheduleTransfer.fromJson(raw)
-            val validPeriods = _uiState.value.lessonTimes.map { it.period }.toSet()
+            val payload = AppDataTransfer.fromJson(raw)
+            val activeSlots = payload.profiles.firstOrNull { it.id == payload.activeProfileId }?.slots
+                ?: emptyList()
+            val validPeriods = activeSlots.map { it.period }.toSet()
             val importedItems = normalizeCourses(payload.schedule.items)
             val normalizedItems = importedItems.filter { it.period in validPeriods }
             val removedCount = importedItems.size - normalizedItems.size
-            val lessonTimes = _uiState.value.lessonTimes
             val schedule = WeeklySchedule(
                 teacher = payload.schedule.teacher.ifBlank { ScheduleDefaults.DEFAULT_TEACHER },
                 items = normalizedItems
             )
+            val reminderSettings = _uiState.value.reminderSettings
+            ScheduleRepository.saveLessonTimeProfiles(context, payload.profiles, payload.activeProfileId)
             ScheduleRepository.save(context, schedule)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
-            val reminderSettings = _uiState.value.reminderSettings
+            val importMessage = "数据已导入。"
             val alarmMessage = if (reminderSettings.alarmModeEnabled) {
-                refreshScheduledAlarms(
-                    schedule = schedule,
-                    lessonTimes = lessonTimes,
-                    settings = reminderSettings
-                ).message
+                refreshScheduledAlarms(schedule, activeSlots, reminderSettings).message
             } else {
-                "课程表已导入。"
+                null
             }
             val removalMessage = if (removedCount > 0) {
                 "已移除 ${removedCount} 条当前作息表未设置时间的无效课程。"
             } else {
                 null
             }
-            val message = listOfNotNull(alarmMessage, removalMessage).joinToString(" ")
             syncLocalState(
                 schedule = schedule,
-                lessonTimes = lessonTimes,
-                lessonTimeProfiles = _uiState.value.lessonTimeProfiles,
-                activeLessonTimeProfileId = _uiState.value.activeLessonTimeProfileId,
+                lessonTimes = activeSlots,
+                lessonTimeProfiles = payload.profiles,
+                activeLessonTimeProfileId = payload.activeProfileId,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                message = message
+                message = listOfNotNull(importMessage, alarmMessage, removalMessage).joinToString(" ")
             )
-            removalMessage
+            listOfNotNull(importMessage, alarmMessage, removalMessage).joinToString(" ")
         }.getOrElse {
             "导入失败：${it.message ?: "文件格式不正确"}"
         }
@@ -378,11 +385,12 @@ class ScheduleViewModel(
         val source = slots.sortedBy { it.period }
         val profile = ScheduleRepository.newLessonTimeProfile(trimmed, source)
         val updatedProfiles = _uiState.value.lessonTimeProfiles + profile
-        val activeId = _uiState.value.activeLessonTimeProfileId
+        val activeId = _uiState.value.activeLessonTimeProfileId.ifBlank { profile.id }
         ScheduleRepository.saveLessonTimeProfiles(context, updatedProfiles, activeId)
         _uiState.value = _uiState.value.copy(
             lessonTimeProfiles = updatedProfiles,
             activeLessonTimeProfileId = activeId,
+            lessonTimes = updatedProfiles.firstOrNull { it.id == activeId }?.slots ?: _uiState.value.lessonTimes,
             message = "已新增${profile.name}。"
         )
         return profile.id
@@ -454,78 +462,29 @@ class ScheduleViewModel(
         )
     }
 
-    fun exportLessonTimeProfilesJson(profileIds: Set<String>): String {
-        val selectedIds = profileIds.ifEmpty { _uiState.value.lessonTimeProfiles.map { it.id }.toSet() }
-        val profiles = _uiState.value.lessonTimeProfiles.filter { it.id in selectedIds }
-            .ifEmpty { _uiState.value.lessonTimeProfiles }
-        return LessonTimeProfilesTransfer.toJson(profiles)
-    }
-
-    fun importLessonTimeProfileJson(raw: String, targetProfileId: String, defaultName: String): String? {
-        return runCatching {
-            val imported = LessonTimeProfilesTransfer.fromJson(raw).profiles.first()
-            val resolvedName = defaultName.ifBlank { imported.name }.ifBlank { "导入作息表" }
-            val currentProfiles = _uiState.value.lessonTimeProfiles
-            val importedProfile = ScheduleRepository.newLessonTimeProfile(
-                name = resolvedName,
-                sourceSlots = mergedLessonTimesFor(_uiState.value.schedule.items, imported.slots)
-            )
-            val updated = if (currentProfiles.any { it.id == targetProfileId }) {
-                currentProfiles.map { profile ->
-                    if (profile.id == targetProfileId) {
-                        importedProfile.copy(id = profile.id)
-                    } else {
-                        profile
-                    }
-                }
-            } else {
-                currentProfiles + importedProfile
-            }
-            val activeId = _uiState.value.activeLessonTimeProfileId
-            ScheduleRepository.saveLessonTimeProfiles(context, updated, activeId)
-            val activeSlots = updated.firstOrNull { it.id == activeId }?.slots ?: _uiState.value.lessonTimes
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
-            val message = if (_uiState.value.reminderSettings.alarmModeEnabled) {
-                refreshScheduledAlarms(_uiState.value.schedule, activeSlots, _uiState.value.reminderSettings).message
-            } else {
-                "作息表已导入。"
-            }
-            syncLocalState(
-                schedule = _uiState.value.schedule,
-                lessonTimes = activeSlots,
-                lessonTimeProfiles = updated,
-                activeLessonTimeProfileId = activeId,
-                reminderSettings = _uiState.value.reminderSettings,
-                exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
-                notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                message = message
-            )
-            null
-        }.getOrElse {
-            "导入失败：${it.message ?: "文件格式不正确"}"
-        }
-    }
-
     private suspend fun hydrateLocalState() {
         val storedSchedule = withContext(Dispatchers.IO) {
             normalizeCourses(ScheduleRepository.load(context))
         }
-        val lessonTimes = withContext(Dispatchers.IO) {
-            mergedLessonTimesFor(storedSchedule, ScheduleRepository.loadLessonTimes(context))
-        }
-        val lessonTimeProfiles = withContext(Dispatchers.IO) {
-            val activeId = ScheduleRepository.loadActiveLessonTimeProfileId(context)
-            ScheduleRepository.loadLessonTimeProfiles(context).map { profile ->
-                if (profile.id == activeId) {
-                    profile.copy(slots = lessonTimes)
-                } else {
-                    profile
-                }
-            }
+        val storedProfiles = withContext(Dispatchers.IO) {
+            ScheduleRepository.loadLessonTimeProfiles(context)
         }
         val activeLessonTimeProfileId = withContext(Dispatchers.IO) {
             ScheduleRepository.loadActiveLessonTimeProfileId(context)
+        }
+        val lessonTimes = withContext(Dispatchers.IO) {
+            if (storedProfiles.isEmpty()) {
+                emptyList()
+            } else {
+                mergedLessonTimesFor(storedSchedule, ScheduleRepository.loadLessonTimes(context))
+            }
+        }
+        val lessonTimeProfiles = storedProfiles.map { profile ->
+            if (profile.id == activeLessonTimeProfileId) {
+                profile.copy(slots = lessonTimes)
+            } else {
+                profile
+            }
         }
         val reminderSettings = withContext(Dispatchers.IO) {
             ScheduleRepository.loadReminderSettings(context)
@@ -721,6 +680,9 @@ class ScheduleViewModel(
         items: List<CourseItem>,
         current: List<LessonTimeSlot> = _uiState.value.lessonTimes
     ): List<LessonTimeSlot> {
+        if (current.isEmpty() && _uiState.value.lessonTimeProfiles.isEmpty()) {
+            return emptyList()
+        }
         return ScheduleDefaults.mergeLessonTimeSlots(current, items.map { it.period })
     }
 

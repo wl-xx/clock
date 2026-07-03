@@ -91,29 +91,27 @@ object ScheduleDefaults {
 
     fun isEarlyStudyPeriod(period: Int): Boolean = period == EARLY_STUDY_PERIOD
 
-    fun isLateStudyPeriod(period: Int): Boolean = period == LATE_STUDY_PERIOD_BASE
-
-    fun isLegacyLateStudyPeriod(period: Int): Boolean = period >= LATE_STUDY_PERIOD_BASE
+    fun isLateStudyPeriod(period: Int): Boolean = period >= LATE_STUDY_PERIOD_BASE
 
     fun isRegularCoursePeriod(period: Int): Boolean = period > EARLY_STUDY_PERIOD && period < LATE_STUDY_PERIOD_BASE
 
-    fun normalizePeriod(period: Int): Int {
-        return if (isLegacyLateStudyPeriod(period)) LATE_STUDY_PERIOD_BASE else period
-    }
+    fun normalizePeriod(period: Int): Int = period.coerceAtLeast(0)
 
     fun periodLabel(period: Int): String {
+        val lateStudyIndex = period - LATE_STUDY_PERIOD_BASE + 1
         return when {
             isEarlyStudyPeriod(period) -> "早自习"
-            isLateStudyPeriod(normalizePeriod(period)) -> "晚自习"
+            isLateStudyPeriod(period) -> if (lateStudyIndex <= 1) "晚自习" else "晚自习${lateStudyIndex}"
             else -> "第${period}节"
         }
     }
 
     fun tablePeriodLabel(period: Int): String {
-        val normalizedPeriod = normalizePeriod(period)
+        val normalizedPeriod = period
+        val lateStudyIndex = normalizedPeriod - LATE_STUDY_PERIOD_BASE + 1
         return when {
             isEarlyStudyPeriod(normalizedPeriod) -> "早"
-            isLateStudyPeriod(normalizedPeriod) -> "晚"
+            isLateStudyPeriod(normalizedPeriod) -> if (lateStudyIndex <= 1) "晚" else "晚${lateStudyIndex}"
             else -> period.toString()
         }
     }
@@ -122,7 +120,7 @@ object ScheduleDefaults {
         current: List<LessonTimeSlot>,
         requiredPeriods: Iterable<Int>
     ): List<LessonTimeSlot> {
-        val periodSet = (current.map { normalizePeriod(it.period) } + requiredPeriods.map(::normalizePeriod) + defaultTimePairs.keys)
+        val periodSet = (current.map { normalizePeriod(it.period) } + requiredPeriods.map(::normalizePeriod))
             .toSet()
             .sorted()
         val indexed = current.associateBy { it.period }

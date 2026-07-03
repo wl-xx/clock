@@ -7,7 +7,6 @@ import android.app.Service
 import android.content.pm.ServiceInfo
 import android.content.Context
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -180,7 +179,6 @@ class AlarmForegroundService : Service() {
         val contentText = todayCourseText()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
             .setContentTitle("今日课程")
             .setContentText(contentText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
@@ -234,7 +232,7 @@ class AlarmForegroundService : Service() {
         private const val CHANNEL_ID = "today_course_foreground_v1"
         private const val NOTIFICATION_ID = 2100
         private const val WAKELOCK_TAG = "PinkSchedule:ForegroundGuardian"
-        private const val CHECK_INTERVAL_MS = 30_000L
+        private const val CHECK_INTERVAL_MS = 1_000L
         const val ACTION_STOP = "com.example.pinkschedule.reminder.action.STOP_GUARDIAN"
 
         fun start(context: Context) {

@@ -201,33 +201,85 @@ object SystemAlarmScheduler {
         return canHandle
     }
 
-    /**
-     * 尝试打开 ColorOS/OPPO 的“启动管理 / 自启动”页面，让用户允许本 app 自启动与后台运行。
-     * 这是 ColorOS 上闹钟能否在息屏/睡眠时段存活的决定性系统开关，代码无法代为授予，只能引导。
-     * 已知组件在不同 ColorOS 版本上不稳定，逐个尝试，全部失败则回退到应用详情页。
-     */
+    /** 打开各主流 ROM 的自启动/后台启动管理页，失败时回退到本应用详情页。 */
     fun openAutoStartSettings(context: Context): Boolean {
-        val candidates = listOf(
-            // ColorOS 启动管理器（不同版本组件名不同）
-            "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
-            "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
-            "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
-            "com.coloros.oppoguardelf" to "com.coloros.powermanager.fuelgaue.PowerUsageModelActivity",
-            // 部分 ColorOS 15 走 OPlus 安全中心
-            "com.oplus.safecenter" to "com.oplus.safecenter.permission.startup.StartupAppListActivity"
-        )
-        for ((pkg, cls) in candidates) {
-            val intent = Intent().apply {
-                setClassName(pkg, cls)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
+        val candidates = buildList {
+            when {
+                manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco") -> {
+                    add(componentIntent("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"))
+                    add(componentIntent("com.miui.securitycenter", "com.miui.powercenter.PowerSettings"))
+                }
+                manufacturer.contains("oppo") || manufacturer.contains("realme") || manufacturer.contains("oneplus") -> {
+                    add(componentIntent("com.oplus.battery", "com.oplus.startupapp.view.StartupAppListActivity"))
+                    add(componentIntent("com.oplus.battery", "com.oplus.startupapp.view.OptimizationAutoStartActivity"))
+                    add(componentIntent("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"))
+                    add(componentIntent("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"))
+                    add(componentIntent("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"))
+                    add(componentIntent("com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"))
+                    add(componentIntent("com.coloros.oppoguardelf", "com.coloros.powermanager.fuelgaue.PowerUsageModelActivity"))
+                    add(componentIntent("com.oplus.battery", "com.oplus.powermanager.fuelgaue.PowerUsageModelActivity"))
+                }
+                manufacturer.contains("vivo") || manufacturer.contains("iqoo") -> {
+                    add(componentIntent("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"))
+                    add(componentIntent("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.PurviewTabActivity"))
+                    add(componentIntent("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"))
+                    add(componentIntent("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"))
+                }
+                manufacturer.contains("huawei") || manufacturer.contains("honor") -> {
+                    add(componentIntent("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"))
+                    add(componentIntent("com.huawei.systemmanager", "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"))
+                    add(componentIntent("com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"))
+                }
+                manufacturer.contains("meizu") -> {
+                    add(componentIntent("com.meizu.safe", "com.meizu.safe.permission.SmartBGActivity"))
+                    add(componentIntent("com.meizu.safe", "com.meizu.safe.security.HomeActivity"))
+                }
+                manufacturer.contains("asus") -> {
+                    add(componentIntent("com.asus.mobilemanager", "com.asus.mobilemanager.entry.FunctionActivity"))
+                    add(componentIntent("com.asus.mobilemanager", "com.asus.mobilemanager.MainActivity"))
+                }
+                manufacturer.contains("samsung") -> {
+                    add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
             }
-            if (intent.resolveActivity(context.packageManager) != null) {
-                val launched = runCatching { context.startActivity(intent) }.isSuccess
-                if (launched) return true
-            }
+            addAll(commonAutoStartIntents())
         }
-        // 回退：打开本应用的系统详情页，用户可从这里手动进入自启动/耗电管理。
+        if (launchFirstAvailable(context, candidates)) return true
         return openAppDetailsSettings(context)
+    }
+
+    private fun componentIntent(packageName: String, className: String): Intent {
+        return Intent().apply {
+            setClassName(packageName, className)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    private fun commonAutoStartIntents(): List<Intent> {
+        return listOf(
+            componentIntent("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
+            componentIntent("com.oplus.battery", "com.oplus.startupapp.view.StartupAppListActivity"),
+            componentIntent("com.oplus.battery", "com.oplus.startupapp.view.OptimizationAutoStartActivity"),
+            componentIntent("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"),
+            componentIntent("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+            componentIntent("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+            componentIntent("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
+            componentIntent("com.meizu.safe", "com.meizu.safe.permission.SmartBGActivity")
+        )
+    }
+
+    private fun launchFirstAvailable(context: Context, intents: List<Intent>): Boolean {
+        intents.forEach { intent ->
+            val launched = runCatching {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }.onFailure {
+                Log.d(TAG, "auto-start settings intent failed: ${intent.component ?: intent.action}", it)
+            }.isSuccess
+            if (launched) return true
+        }
+        return false
     }
 
     /** 打开本应用的系统“应用详情”页（自启动、后台运行、耗电管理等入口通常在此页内）。 */
