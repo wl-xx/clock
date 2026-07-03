@@ -2,6 +2,12 @@
 
 湘约一课是一款面向教师和学生的 Android 课程表应用，用于管理每周课程、作息时间、班级预设和上课提醒。应用采用 Jetpack Compose 构建，重点优化了锁屏通知、前台常驻今日课程、提示音、震动和闹钟提醒等移动端场景。
 
+## 应用截图
+
+| 课程表 | 课程管理 | 设置 |
+| --- | --- | --- |
+| <img src="docs/images/class-timeline.jpg" alt="课程表时间线" width="260"> | <img src="docs/images/class-management.jpg" alt="课程管理" width="260"> | <img src="docs/images/settings.jpg" alt="设置" width="260"> |
+
 ## 功能特性
 
 - 课程表视图：支持时间线和表格两种查看方式，按日期展示当天课程。
