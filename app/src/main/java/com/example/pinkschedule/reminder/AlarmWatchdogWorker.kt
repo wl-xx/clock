@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
  * ColorOS / MIUI 等激进省电 ROM 会周期性冻结或清理 app，导致已注册的 AlarmManager 闹钟
  * 被清掉、前台服务被杀。WorkManager 走 JobScheduler，OEM 更不敢干预，是最难被杀的一层。
  *
- * 本 Worker 周期性（最短 15 分钟）重新全量预排课程闹钟：
+ * 本 Worker 周期性（最短 15 分钟）重新全量预排课程提醒：
  * - 若闹钟仍在，rescheduleStoredCourseAlarms 用相同 requestCode + FLAG_UPDATE_CURRENT 覆盖，无副作用；
  * - 若被 ROM 清掉，这里把它们补回来。
  *
@@ -29,8 +29,8 @@ class AlarmWatchdogWorker(
     override fun doWork(): Result {
         return runCatching {
             val settings = ScheduleRepository.loadReminderSettings(applicationContext)
-            if (!settings.alarmModeEnabled) {
-                Log.i(TAG, "watchdog: alarm mode disabled, skip")
+            if (!settings.hasEnabledReminder()) {
+                Log.i(TAG, "watchdog: course reminders disabled, skip")
                 return@runCatching Result.success()
             }
             val result = SystemAlarmScheduler.rescheduleStoredCourseAlarms(applicationContext)

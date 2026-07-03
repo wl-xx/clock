@@ -35,11 +35,41 @@ data class WeeklySchedule(
 )
 
 data class ReminderSettings(
+    val notificationsEnabled: Boolean = true,
     val alarmModeEnabled: Boolean = false,
+    val vibrationReminderEnabled: Boolean = false,
+    val soundReminderEnabled: Boolean = false,
+    val soundReminderToneId: String = ReminderTone.DEFAULT_ID,
     val reminderMinutesBefore: Int = ScheduleDefaults.DEFAULT_REMINDER_MINUTES
 ) {
     fun normalized(): ReminderSettings {
-        return copy(reminderMinutesBefore = reminderMinutesBefore.coerceAtLeast(0))
+        return copy(
+            reminderMinutesBefore = reminderMinutesBefore.coerceAtLeast(0),
+            soundReminderToneId = ReminderTone.resolve(soundReminderToneId).id
+        )
+    }
+
+    fun hasEnabledReminder(): Boolean {
+        return notificationsEnabled && (alarmModeEnabled || vibrationReminderEnabled || soundReminderEnabled)
+    }
+}
+
+data class ReminderTone(
+    val id: String,
+    val label: String
+) {
+    companion object {
+        const val DEFAULT_ID = "ding_dong"
+
+        val OPTIONS = listOf(
+            ReminderTone("ding_dong", "叮咚铃声"),
+            ReminderTone("happy_bells", "欢快铃声"),
+            ReminderTone("bell", "清脆铃声")
+        )
+
+        fun resolve(id: String): ReminderTone {
+            return OPTIONS.firstOrNull { it.id == id } ?: OPTIONS.first()
+        }
     }
 }
 

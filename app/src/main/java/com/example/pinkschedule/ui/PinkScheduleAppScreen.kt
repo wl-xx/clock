@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
@@ -66,8 +67,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -82,6 +81,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
@@ -101,8 +101,10 @@ import com.example.pinkschedule.data.ScheduleImageExporter
 import com.example.pinkschedule.model.LessonTimeProfile
 import com.example.pinkschedule.model.CourseItem
 import com.example.pinkschedule.model.LessonTimeSlot
+import com.example.pinkschedule.model.ReminderTone
 import com.example.pinkschedule.model.ScheduleDefaults
 import com.example.pinkschedule.model.WeeklySchedule
+import com.example.pinkschedule.reminder.AlarmPlaybackManager
 import com.example.pinkschedule.reminder.SystemAlarmScheduler
 import com.example.pinkschedule.viewmodel.ScheduleViewModel
 import kotlinx.coroutines.delay
@@ -143,7 +145,12 @@ fun PinkScheduleAppScreen(
     var addingCourse by remember { mutableStateOf(false) }
     var addingCourseDay by remember { mutableStateOf(LocalDate.now().dayOfWeek) }
     var errorDialogMessage by remember { mutableStateOf<String?>(null) }
+    var settingsAtTopLevel by rememberSaveable { mutableStateOf(true) }
+    var settingsNotificationsEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.notificationsEnabled) }
     var settingsAlarmModeEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.alarmModeEnabled) }
+    var settingsVibrationReminderEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.vibrationReminderEnabled) }
+    var settingsSoundReminderEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.soundReminderEnabled) }
+    var settingsSoundReminderToneId by rememberSaveable { mutableStateOf(uiState.reminderSettings.soundReminderToneId) }
     var settingsReminderMinutesText by rememberSaveable { mutableStateOf(uiState.reminderSettings.reminderMinutesBefore.toString()) }
     val importDataLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -154,7 +161,11 @@ fun PinkScheduleAppScreen(
         }
     }
     LaunchedEffect(uiState.reminderSettings) {
+        settingsNotificationsEnabled = uiState.reminderSettings.notificationsEnabled
         settingsAlarmModeEnabled = uiState.reminderSettings.alarmModeEnabled
+        settingsVibrationReminderEnabled = uiState.reminderSettings.vibrationReminderEnabled
+        settingsSoundReminderEnabled = uiState.reminderSettings.soundReminderEnabled
+        settingsSoundReminderToneId = uiState.reminderSettings.soundReminderToneId
         settingsReminderMinutesText = uiState.reminderSettings.reminderMinutesBefore.toString()
     }
 
@@ -162,6 +173,12 @@ fun PinkScheduleAppScreen(
         uiState.message
             ?.takeIf(::isErrorMessage)
             ?.let { errorDialogMessage = it }
+    }
+
+    LaunchedEffect(selectedPage) {
+        if (selectedPage != AppPage.SETTINGS) {
+            settingsAtTopLevel = true
+        }
     }
 
     LaunchedEffect(incomingImportIntent) {
@@ -177,10 +194,15 @@ fun PinkScheduleAppScreen(
             .fillMaxSize()
             .background(Color(0xFFFFF3F7))
     ) {
+        val bottomBarVisible = when (selectedPage) {
+            AppPage.SETTINGS -> settingsAtTopLevel
+            else -> true
+        }
         Column(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .weight(1f)
+                    .then(if (bottomBarVisible) Modifier else Modifier.navigationBarsPadding())
                     .verticalScroll(scrollState)
                     .padding(horizontal = 22.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
@@ -224,14 +246,23 @@ fun PinkScheduleAppScreen(
                     )
                     AppPage.SETTINGS -> SettingsPage(
                         lessonTimes = uiState.lessonTimes,
+                        notificationsEnabled = settingsNotificationsEnabled,
                         alarmModeEnabled = settingsAlarmModeEnabled,
+                        vibrationReminderEnabled = settingsVibrationReminderEnabled,
+                        soundReminderEnabled = settingsSoundReminderEnabled,
+                        soundReminderToneId = settingsSoundReminderToneId,
                         reminderMinutesText = settingsReminderMinutesText,
                         exactAlarmPermissionGranted = uiState.exactAlarmPermissionGranted,
                         notificationPermissionGranted = uiState.notificationPermissionGranted,
+                        classPresets = uiState.classPresets,
                         coursePeriods = uiState.schedule.items.map { it.period }.toSet(),
                         lessonTimeProfiles = uiState.lessonTimeProfiles,
                         activeLessonTimeProfileId = uiState.activeLessonTimeProfileId,
+                        onNotificationsEnabledChange = { settingsNotificationsEnabled = it },
                         onAlarmModeEnabledChange = { settingsAlarmModeEnabled = it },
+                        onVibrationReminderEnabledChange = { settingsVibrationReminderEnabled = it },
+                        onSoundReminderEnabledChange = { settingsSoundReminderEnabled = it },
+                        onSoundReminderToneChange = { settingsSoundReminderToneId = it },
                         onReminderMinutesTextChange = { settingsReminderMinutesText = it },
                         onSaveSettings = viewModel::updateReminderSettings,
                         onUpdateLessonTimeForProfile = viewModel::updateLessonTimeForProfile,
@@ -240,6 +271,9 @@ fun PinkScheduleAppScreen(
                         onRenameLessonTimeProfile = viewModel::renameLessonTimeProfile,
                         onDeleteLessonTimeProfiles = viewModel::deleteLessonTimeProfiles,
                         onSelectLessonTimeProfile = viewModel::selectLessonTimeProfile,
+                        onAddClassPreset = viewModel::addClassPreset,
+                        onRenameClassPreset = viewModel::renameClassPreset,
+                        onDeleteClassPreset = viewModel::deleteClassPreset,
                         onImportData = {
                             importDataLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
                         },
@@ -259,13 +293,16 @@ fun PinkScheduleAppScreen(
                                 ?.let { message -> errorDialogMessage = message }
                         },
                         onErrorMessage = { errorDialogMessage = it },
-                        onRefreshPermission = viewModel::refreshExactAlarmPermission
+                        onRefreshPermission = viewModel::refreshExactAlarmPermission,
+                        onTopLevelChange = { settingsAtTopLevel = it }
                     )
                 }
 
                 Spacer(Modifier.height(4.dp))
             }
-            AppBottomBar(selected = selectedPage, onSelect = { selectedPage = it })
+            if (bottomBarVisible) {
+                AppBottomBar(selected = selectedPage, onSelect = { selectedPage = it })
+            }
         }
     }
 
@@ -283,6 +320,7 @@ fun PinkScheduleAppScreen(
         CourseEditorDialog(
             teacher = uiState.schedule.teacher,
             lessonTimes = uiState.lessonTimes,
+            classPresets = uiState.classPresets,
             course = null,
             defaultDay = addingCourseDay,
             onDismiss = { addingCourse = false },
@@ -298,6 +336,7 @@ fun PinkScheduleAppScreen(
         CourseEditorDialog(
             teacher = uiState.schedule.teacher,
             lessonTimes = uiState.lessonTimes,
+            classPresets = uiState.classPresets,
             course = course,
             defaultDay = course.dayOfWeek,
             onDismiss = { editingCourse = null },
@@ -807,7 +846,7 @@ private fun CourseManagementPage(
             onDismissRequest = { pendingDeleteCourse = null },
             shape = RoundedCornerShape(24.dp),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("删除课程？") },
+            title = { DialogTitle("删除课程？", onDismiss = { pendingDeleteCourse = null }) },
             text = {
                 Text(
                     "确定删除 ${slotLabel(course.period)} · ${course.courseName} · ${course.className.ifBlank { "未填写班级" }} 吗？",
@@ -822,11 +861,6 @@ private fun CourseManagementPage(
                     }
                 ) {
                     Text("删除", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteCourse = null }) {
-                    Text("取消", color = Color(0xFF8F878C))
                 }
             }
         )
@@ -967,18 +1001,11 @@ private fun AppErrorDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
         containerColor = Color(0xFFFFFCFA),
-        title = {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = Color(0xFF202023),
-                fontWeight = FontWeight.Black
-            )
-        },
+        title = { DialogTitle(title, onDismiss = onDismiss) },
         text = {
             Text(
                 text = if (isPermissionGuide) {
-                    "请将权限设置页中的必要权限都打开，否则闹钟功能无法正常使用。"
+                    "请将系统权限中的必要权限都打开，否则通知功能无法正常使用。"
                 } else {
                     message
                 },
@@ -997,27 +1024,40 @@ private fun AppErrorDialog(
 @Composable
 private fun SettingsPage(
     lessonTimes: List<LessonTimeSlot>,
+    notificationsEnabled: Boolean,
     alarmModeEnabled: Boolean,
+    vibrationReminderEnabled: Boolean,
+    soundReminderEnabled: Boolean,
+    soundReminderToneId: String,
     reminderMinutesText: String,
     exactAlarmPermissionGranted: Boolean,
     notificationPermissionGranted: Boolean,
+    classPresets: List<String>,
     coursePeriods: Set<Int>,
     lessonTimeProfiles: List<LessonTimeProfile>,
     activeLessonTimeProfileId: String,
+    onNotificationsEnabledChange: (Boolean) -> Unit,
     onAlarmModeEnabledChange: (Boolean) -> Unit,
+    onVibrationReminderEnabledChange: (Boolean) -> Unit,
+    onSoundReminderEnabledChange: (Boolean) -> Unit,
+    onSoundReminderToneChange: (String) -> Unit,
     onReminderMinutesTextChange: (String) -> Unit,
-    onSaveSettings: (Boolean, Int) -> com.example.pinkschedule.viewmodel.ReminderSettingsAction,
+    onSaveSettings: (Boolean, Boolean, Boolean, Boolean, String, Int) -> com.example.pinkschedule.viewmodel.ReminderSettingsAction,
     onUpdateLessonTimeForProfile: (String, Int, LocalTime, LocalTime) -> Unit,
     onDeleteLessonTimeFromProfile: (String, Int) -> Unit,
     onAddLessonTimeProfile: (String, List<LessonTimeSlot>) -> String?,
     onRenameLessonTimeProfile: (String, String) -> Unit,
     onDeleteLessonTimeProfiles: (Set<String>) -> Unit,
     onSelectLessonTimeProfile: (String) -> Unit,
+    onAddClassPreset: (String) -> String?,
+    onRenameClassPreset: (String, String) -> String?,
+    onDeleteClassPreset: (String) -> Unit,
     onImportData: () -> Unit,
     onExportData: () -> Unit,
     onShareScheduleImage: () -> Unit,
     onErrorMessage: (String) -> Unit,
-    onRefreshPermission: () -> Unit
+    onRefreshPermission: () -> Unit,
+    onTopLevelChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1031,13 +1071,19 @@ private fun SettingsPage(
     var requestNotificationStyleTick by remember { mutableStateOf(0) }
     var requestBatteryOptimizationTick by remember { mutableStateOf(0) }
     var requestAutoStartTick by remember { mutableStateOf(0) }
+    var lastSavedNotificationsEnabled by remember { mutableStateOf(notificationsEnabled) }
     var lastSavedAlarmModeEnabled by remember { mutableStateOf(alarmModeEnabled) }
+    var lastSavedVibrationReminderEnabled by remember { mutableStateOf(vibrationReminderEnabled) }
+    var lastSavedSoundReminderEnabled by remember { mutableStateOf(soundReminderEnabled) }
+    var lastSavedSoundReminderToneId by remember { mutableStateOf(soundReminderToneId) }
     var lastSavedReminderMinutesText by remember { mutableStateOf(reminderMinutesText) }
+    var showSoundToneDialog by remember { mutableStateOf(false) }
     var batteryOptimizationIgnored by remember {
         mutableStateOf(SystemAlarmScheduler.isIgnoringBatteryOptimizations(context))
     }
     var activeSettingsPanel by rememberSaveable { mutableStateOf<String?>(null) }
     var permissionBackTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var permissionGuideReason by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedLessonTimeProfileId by rememberSaveable { mutableStateOf(activeLessonTimeProfileId) }
     var draftLessonTimeProfile by remember { mutableStateOf<LessonTimeProfile?>(null) }
 
@@ -1057,12 +1103,22 @@ private fun SettingsPage(
             "time-current" -> "time"
             "time-edit" -> "time-edit-list"
             "time-edit-list" -> "time"
-            "alarm", "time" -> null
+            "alarm", "time", "class" -> null
             else -> null
         }
         if (activeSettingsPanel != "permission") {
             permissionBackTarget = null
+            permissionGuideReason = null
         }
+    }
+
+    fun markDisabledReminderSettingsAsSaved() {
+        lastSavedNotificationsEnabled = notificationsEnabled
+        lastSavedAlarmModeEnabled = false
+        lastSavedVibrationReminderEnabled = false
+        lastSavedSoundReminderEnabled = false
+        lastSavedSoundReminderToneId = soundReminderToneId
+        lastSavedReminderMinutesText = reminderMinutesText
     }
 
     LaunchedEffect(activeLessonTimeProfileId, lessonTimeProfiles, draftLessonTimeProfile?.id) {
@@ -1076,6 +1132,16 @@ private fun SettingsPage(
         goBack()
     }
 
+    LaunchedEffect(activeSettingsPanel) {
+        onTopLevelChange(activeSettingsPanel == null)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            onTopLevelChange(true)
+        }
+    }
+
     LaunchedEffect(requestPermissionTick) {
         if (requestPermissionTick > 0) {
             openExactAlarmPermission(context)
@@ -1084,7 +1150,7 @@ private fun SettingsPage(
 
     LaunchedEffect(requestNotificationPermissionTick) {
         if (requestNotificationPermissionTick > 0) {
-            requestNotificationPermission(notificationPermissionLauncher)
+            requestNotificationPermission(context, notificationPermissionLauncher)
         }
     }
 
@@ -1106,30 +1172,57 @@ private fun SettingsPage(
         }
     }
 
-    LaunchedEffect(alarmModeEnabled) {
-        if (alarmModeEnabled == lastSavedAlarmModeEnabled) return@LaunchedEffect
+    LaunchedEffect(
+        notificationsEnabled,
+        alarmModeEnabled,
+        vibrationReminderEnabled,
+        soundReminderEnabled,
+        soundReminderToneId
+    ) {
+        if (
+            notificationsEnabled == lastSavedNotificationsEnabled &&
+            alarmModeEnabled == lastSavedAlarmModeEnabled &&
+            vibrationReminderEnabled == lastSavedVibrationReminderEnabled &&
+            soundReminderEnabled == lastSavedSoundReminderEnabled &&
+            soundReminderToneId == lastSavedSoundReminderToneId
+        ) return@LaunchedEffect
         val minutes = reminderMinutesText.toIntOrNull()
         if (minutes == null) {
             onErrorMessage("请输入有效的分钟数。")
             return@LaunchedEffect
         }
-        val action = onSaveSettings(alarmModeEnabled, minutes)
+        val action = onSaveSettings(
+            notificationsEnabled,
+            alarmModeEnabled,
+            vibrationReminderEnabled,
+            soundReminderEnabled,
+            soundReminderToneId,
+            minutes
+        )
         action.message?.takeIf(::isErrorMessage)?.let(onErrorMessage)
         if (action.requestExactAlarmPermission) {
             onAlarmModeEnabledChange(false)
+            onVibrationReminderEnabledChange(false)
+            onSoundReminderEnabledChange(false)
+            markDisabledReminderSettingsAsSaved()
             permissionBackTarget = "alarm"
+            permissionGuideReason = "exact"
             activeSettingsPanel = "permission"
         } else if (action.requestNotificationPermission) {
             onAlarmModeEnabledChange(false)
+            onVibrationReminderEnabledChange(false)
+            onSoundReminderEnabledChange(false)
+            markDisabledReminderSettingsAsSaved()
             permissionBackTarget = "alarm"
+            permissionGuideReason = "notification"
             activeSettingsPanel = "permission"
         } else {
+            lastSavedNotificationsEnabled = notificationsEnabled
             lastSavedAlarmModeEnabled = alarmModeEnabled
+            lastSavedVibrationReminderEnabled = vibrationReminderEnabled
+            lastSavedSoundReminderEnabled = soundReminderEnabled
+            lastSavedSoundReminderToneId = soundReminderToneId
             lastSavedReminderMinutesText = reminderMinutesText
-            if (action.requestBatteryOptimization || action.requestAutoStart) {
-                permissionBackTarget = "alarm"
-                activeSettingsPanel = "permission"
-            }
         }
     }
 
@@ -1142,23 +1235,38 @@ private fun SettingsPage(
                 onErrorMessage("请输入有效的分钟数。")
                 return@LaunchedEffect
             }
-            val action = onSaveSettings(alarmModeEnabled, minutes)
+            val action = onSaveSettings(
+                notificationsEnabled,
+                alarmModeEnabled,
+                vibrationReminderEnabled,
+                soundReminderEnabled,
+                soundReminderToneId,
+                minutes
+            )
             action.message?.takeIf(::isErrorMessage)?.let(onErrorMessage)
             if (action.requestExactAlarmPermission) {
                 onAlarmModeEnabledChange(false)
+                onVibrationReminderEnabledChange(false)
+                onSoundReminderEnabledChange(false)
+                markDisabledReminderSettingsAsSaved()
                 permissionBackTarget = "alarm"
+                permissionGuideReason = "exact"
                 activeSettingsPanel = "permission"
             } else if (action.requestNotificationPermission) {
                 onAlarmModeEnabledChange(false)
+                onVibrationReminderEnabledChange(false)
+                onSoundReminderEnabledChange(false)
+                markDisabledReminderSettingsAsSaved()
                 permissionBackTarget = "alarm"
+                permissionGuideReason = "notification"
                 activeSettingsPanel = "permission"
             } else {
+                lastSavedNotificationsEnabled = notificationsEnabled
                 lastSavedAlarmModeEnabled = alarmModeEnabled
+                lastSavedVibrationReminderEnabled = vibrationReminderEnabled
+                lastSavedSoundReminderEnabled = soundReminderEnabled
+                lastSavedSoundReminderToneId = soundReminderToneId
                 lastSavedReminderMinutesText = reminderMinutesText
-                if (action.requestBatteryOptimization || action.requestAutoStart) {
-                    permissionBackTarget = "alarm"
-                    activeSettingsPanel = "permission"
-                }
             }
         }
     }
@@ -1175,12 +1283,16 @@ private fun SettingsPage(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(24.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(if (activeSettingsPanel == null) 24.dp else 16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
         SettingsTitle(
             title = when (activeSettingsPanel) {
-                "permission" -> "权限设置"
-                "alarm" -> "闹钟设置"
-                "time" -> "作息时间设置"
+                "permission" -> "系统权限"
+                "alarm" -> "通知"
+                "time" -> "作息时间"
+                "class" -> "班级"
                 "time-view-list" -> "查看作息表"
                 "time-view" -> lessonTimeProfiles.firstOrNull { it.id == selectedLessonTimeProfileId }?.name ?: "作息时间"
                 "time-current" -> "设置当前作息表"
@@ -1197,22 +1309,28 @@ private fun SettingsPage(
                 SettingsListGroup {
                     SettingsListRow(
                         icon = Icons.Filled.Security,
-                        title = "权限设置",
+                        title = "系统权限",
                         onClick = {
                             refreshManualPermissionState()
                             permissionBackTarget = null
+                            permissionGuideReason = null
                             activeSettingsPanel = "permission"
                         }
                     )
                     SettingsListRow(
                         icon = Icons.Filled.NotificationsActive,
-                        title = "闹钟设置",
+                        title = "通知",
                         onClick = { activeSettingsPanel = "alarm" }
                     )
                     SettingsListRow(
                         icon = Icons.Filled.AccessTime,
-                        title = "作息时间设置",
+                        title = "作息时间",
                         onClick = { activeSettingsPanel = "time" }
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.TableChart,
+                        title = "班级",
+                        onClick = { activeSettingsPanel = "class" }
                     )
                     SettingsListRow(
                         icon = Icons.Filled.FileUpload,
@@ -1242,42 +1360,96 @@ private fun SettingsPage(
                     onRequestBatteryOptimization = { requestBatteryOptimizationTick += 1 },
                     onRequestAutoStart = { requestAutoStartTick += 1 },
                     onRefresh = { refreshManualPermissionState() },
-                    onBackToAlarmSettings = { activeSettingsPanel = "alarm" }
+                    onBackToAlarmSettings = {
+                        permissionGuideReason = null
+                        activeSettingsPanel = "alarm"
+                    },
+                    guideText = permissionGuideText(
+                        reason = permissionGuideReason,
+                        exactAlarmPermissionGranted = exactAlarmPermissionGranted,
+                        notificationPermissionGranted = notificationPermissionGranted,
+                        batteryOptimizationIgnored = batteryOptimizationIgnored
+                    )
                 )
             }
             "alarm" -> {
+                val notificationControlsEnabled = notificationsEnabled
                 SettingsListGroup {
                     SettingsListRow(
-                        icon = Icons.Filled.NotificationsActive,
-                        title = "课程闹钟",
+                        title = "关闭通知",
+                        description = if (notificationsEnabled) "关闭后不显示任何课程提醒" else "已关闭",
                         trailing = {
-                            Switch(
-                                checked = alarmModeEnabled,
-                                onCheckedChange = onAlarmModeEnabledChange,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = Color(0xFFE26786),
-                                    checkedBorderColor = Color(0xFFE26786),
-                                    uncheckedThumbColor = Color.White,
-                                    uncheckedTrackColor = Color(0xFFF1DBD3),
-                                    uncheckedBorderColor = Color(0xFFF1DBD3)
-                                )
+                            SettingsSwitch(
+                                checked = !notificationsEnabled,
+                                onCheckedChange = { checked -> onNotificationsEnabledChange(!checked) }
                             )
                         }
                     )
                     SettingsListRow(
-                        icon = Icons.Filled.Schedule,
+                        title = "闹钟提醒",
+                        description = if (alarmModeEnabled) "开启" else "关闭",
+                        enabled = notificationControlsEnabled,
+                        trailing = {
+                            SettingsSwitch(
+                                checked = alarmModeEnabled,
+                                onCheckedChange = onAlarmModeEnabledChange,
+                                enabled = notificationControlsEnabled
+                            )
+                        }
+                    )
+                    SettingsListRow(
+                        title = "震动提醒",
+                        description = if (vibrationReminderEnabled) "开启" else "关闭",
+                        enabled = notificationControlsEnabled,
+                        trailing = {
+                            SettingsSwitch(
+                                checked = vibrationReminderEnabled,
+                                onCheckedChange = onVibrationReminderEnabledChange,
+                                enabled = notificationControlsEnabled
+                            )
+                        }
+                    )
+                    SettingsListRow(
+                        title = "提示音",
+                        description = if (soundReminderEnabled) "开启" else "关闭",
+                        enabled = notificationControlsEnabled,
+                        trailing = {
+                            SettingsSwitch(
+                                checked = soundReminderEnabled,
+                                onCheckedChange = onSoundReminderEnabledChange,
+                                enabled = notificationControlsEnabled
+                            )
+                        }
+                    )
+                    if (soundReminderEnabled) {
+                        SettingsListRow(
+                            title = "提示音设置",
+                            description = ReminderTone.resolve(soundReminderToneId).label,
+                            enabled = notificationControlsEnabled,
+                            onClick = { showSoundToneDialog = true }
+                        )
+                    }
+                    SettingsListRow(
                         title = "提前提醒",
+                        enabled = notificationControlsEnabled,
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 ReminderMinuteField(
                                     value = reminderMinutesText,
                                     onValueChange = { onReminderMinutesTextChange(it.filter(Char::isDigit)) },
+                                    enabled = notificationControlsEnabled
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text("分钟", color = Color(0xFF8F878C), style = MaterialTheme.typography.bodyMedium)
                             }
                         }
+                    )
+                }
+                if (showSoundToneDialog) {
+                    SoundTonePickerDialog(
+                        selectedToneId = soundReminderToneId,
+                        onSelectTone = onSoundReminderToneChange,
+                        onDismiss = { showSoundToneDialog = false }
                     )
                 }
             }
@@ -1286,6 +1458,15 @@ private fun SettingsPage(
                     onViewSchedules = { activeSettingsPanel = "time-view-list" },
                     onSetCurrentSchedule = { activeSettingsPanel = "time-current" },
                     onEditSchedules = { activeSettingsPanel = "time-edit-list" }
+                )
+            }
+            "class" -> {
+                ClassPresetSettingsPage(
+                    presets = classPresets,
+                    onAddPreset = onAddClassPreset,
+                    onRenamePreset = onRenameClassPreset,
+                    onDeletePreset = onDeleteClassPreset,
+                    onErrorMessage = onErrorMessage
                 )
             }
             "time-current" -> {
@@ -1376,13 +1557,135 @@ private fun RestScheduleSettingsPage(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
-            SettingsListRow(Icons.Filled.Schedule, "查看作息表", onClick = onViewSchedules)
-            HorizontalDivider(color = Color(0xFFF3E4DE))
-            SettingsListRow(Icons.Filled.CheckCircle, "设置当前作息表", onClick = onSetCurrentSchedule)
-            HorizontalDivider(color = Color(0xFFF3E4DE))
-            SettingsListRow(Icons.Filled.Edit, "编辑作息表", onClick = onEditSchedules)
+            SettingsListRow(title = "查看作息表", onClick = onViewSchedules)
+            SettingsListRow(title = "设置当前作息表", onClick = onSetCurrentSchedule)
+            SettingsListRow(title = "编辑作息表", onClick = onEditSchedules)
         }
     }
+}
+
+@Composable
+private fun ClassPresetSettingsPage(
+    presets: List<String>,
+    onAddPreset: (String) -> String?,
+    onRenamePreset: (String, String) -> String?,
+    onDeletePreset: (String) -> Unit,
+    onErrorMessage: (String) -> Unit
+) {
+    var editingPreset by remember { mutableStateOf<String?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsListGroup {
+            if (presets.isEmpty()) {
+                EmptySettingsState(
+                    title = "暂无班级",
+                    description = "点击下方按钮新增常用班级。"
+                )
+            } else {
+                presets.forEach { preset ->
+                    SettingsListRow(
+                        title = preset,
+                        trailing = {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = { editingPreset = preset },
+                                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFE26786)),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("编辑", fontWeight = FontWeight.SemiBold)
+                                }
+                                TextButton(
+                                    onClick = { onDeletePreset(preset) },
+                                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFE26786)),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("删除", fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+        Button(
+            onClick = { showAddDialog = true },
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("新增班级", fontWeight = FontWeight.Bold)
+        }
+    }
+
+    if (showAddDialog) {
+        ClassPresetDialog(
+            title = "新增班级",
+            initialValue = "",
+            onDismiss = { showAddDialog = false },
+            onSave = { name ->
+                val error = onAddPreset(name)
+                if (error == null) {
+                    showAddDialog = false
+                } else {
+                    onErrorMessage(error)
+                }
+            }
+        )
+    }
+    editingPreset?.let { preset ->
+        ClassPresetDialog(
+            title = "编辑班级",
+            initialValue = preset,
+            onDismiss = { editingPreset = null },
+            onSave = { name ->
+                val error = onRenamePreset(preset, name)
+                if (error == null) {
+                    editingPreset = null
+                } else {
+                    onErrorMessage(error)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ClassPresetDialog(
+    title: String,
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var value by remember(initialValue) { mutableStateOf(initialValue) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = Color(0xFFFFFCFA),
+        title = { DialogTitle(title, onDismiss = onDismiss) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                label = { Text("班级名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFFE26786),
+                    unfocusedBorderColor = Color(0xFFF0DDD2),
+                    focusedContainerColor = Color(0xFFFFF7F4),
+                    unfocusedContainerColor = Color(0xFFFFF7F4)
+                )
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(value) }) {
+                Text("保存", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }
 
 @Composable
@@ -1392,21 +1695,24 @@ private fun RestScheduleCurrentPage(
     onSelectProfile: (String) -> Unit
 ) {
     SettingsListGroup {
-        profiles.forEachIndexed { index, profile ->
-            SettingsListRow(
-                icon = if (profile.id == activeProfileId) Icons.Filled.CheckCircle else Icons.Filled.AccessTime,
-                title = if (profile.id == activeProfileId) "${profile.name}（当前）" else profile.name,
-                trailing = {
-                    Text(
-                        "${profile.slots.size} 节",
-                        color = Color(0xFF8F878C),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                },
-                onClick = { onSelectProfile(profile.id) }
+        if (profiles.isEmpty()) {
+            EmptySettingsState(
+                title = "暂无作息表",
+                description = "请先在编辑作息表中新增一个作息表。"
             )
-            if (index != profiles.lastIndex) {
-                HorizontalDivider(color = Color(0xFFF3E4DE))
+        } else {
+            profiles.forEach { profile ->
+                SettingsListRow(
+                    title = if (profile.id == activeProfileId) "${profile.name}（当前）" else profile.name,
+                    trailing = {
+                        Text(
+                            "${profile.slots.size} 节",
+                            color = Color(0xFF8F878C),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    },
+                    onClick = { onSelectProfile(profile.id) }
+                )
             }
         }
     }
@@ -1430,21 +1736,24 @@ private fun RestScheduleListPage(
             }
         }
         SettingsListGroup {
-            profiles.forEachIndexed { index, profile ->
-            SettingsListRow(
-                icon = Icons.Filled.AccessTime,
-                title = if (profile.id == activeProfileId) "${profile.name}（当前）" else profile.name,
-                trailing = {
-                    Text(
-                        "${profile.slots.size} 节",
-                        color = Color(0xFF8F878C),
-                        style = MaterialTheme.typography.bodyMedium
+            if (profiles.isEmpty()) {
+                EmptySettingsState(
+                    title = "暂无作息表",
+                    description = "请先新增一个作息表。"
+                )
+            } else {
+                profiles.forEach { profile ->
+                    SettingsListRow(
+                        title = if (profile.id == activeProfileId) "${profile.name}（当前）" else profile.name,
+                        trailing = {
+                            Text(
+                                "${profile.slots.size} 节",
+                                color = Color(0xFF8F878C),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        },
+                        onClick = { onSelectProfile(profile.id) }
                     )
-                },
-                onClick = { onSelectProfile(profile.id) }
-            )
-                if (index != profiles.lastIndex) {
-                    HorizontalDivider(color = Color(0xFFF3E4DE))
                 }
             }
         }
@@ -1464,57 +1773,61 @@ private fun RestScheduleEditListPage(
     val removableSelection = selectedForDelete - activeProfileId
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
-            profiles.forEachIndexed { index, profile ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = profile.id in selectedForDelete,
-                        onCheckedChange = { checked ->
-                            selectedForDelete = if (checked) {
-                                selectedForDelete + profile.id
-                            } else {
-                                selectedForDelete - profile.id
-                            }
-                        },
-                        modifier = Modifier.alpha(if (profile.id == activeProfileId) 0.42f else 1f),
-                        enabled = profile.id != activeProfileId,
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = Color(0xFFE26786),
-                            uncheckedColor = Color(0xFFB8B1B5),
-                            disabledUncheckedColor = Color(0xFFE3D5D0),
-                            checkmarkColor = Color.White
-                        )
-                    )
+            if (profiles.isEmpty()) {
+                EmptySettingsState(
+                    title = "暂无作息表",
+                    description = "点击下方按钮新增一个作息表。"
+                )
+            } else {
+                profiles.forEach { profile ->
                     Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { onSelectProfile(profile.id) },
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = if (profile.id == activeProfileId) "${profile.name}（当前）" else profile.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color(0xFF303036),
-                            fontWeight = FontWeight.Normal
+                        Checkbox(
+                            checked = profile.id in selectedForDelete,
+                            onCheckedChange = { checked ->
+                                selectedForDelete = if (checked) {
+                                    selectedForDelete + profile.id
+                                } else {
+                                    selectedForDelete - profile.id
+                                }
+                            },
+                            modifier = Modifier.alpha(if (profile.id == activeProfileId) 0.42f else 1f),
+                            enabled = profile.id != activeProfileId,
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = Color(0xFFE26786),
+                                uncheckedColor = Color(0xFFB8B1B5),
+                                disabledUncheckedColor = Color(0xFFE3D5D0),
+                                checkmarkColor = Color.White
+                            )
                         )
-                        Text(
-                            "${profile.slots.size} 节",
-                            color = Color(0xFF8F878C),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { onSelectProfile(profile.id) },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (profile.id == activeProfileId) "${profile.name}（当前）" else profile.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color(0xFF303036),
+                                fontWeight = FontWeight.Normal
+                            )
+                            Text(
+                                "${profile.slots.size} 节",
+                                color = Color(0xFF8F878C),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
-                }
-                if (index != profiles.lastIndex) {
-                    HorizontalDivider(color = Color(0xFFF3E4DE))
                 }
             }
         }
@@ -1526,16 +1839,18 @@ private fun RestScheduleEditListPage(
         ) {
             Text("新增作息表", fontWeight = FontWeight.Bold)
         }
-        OutlinedButton(
-            onClick = {
-                showDeleteConfirm = true
-            },
-            enabled = removableSelection.isNotEmpty(),
-            shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("删除选中作息表", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
+        if (profiles.isNotEmpty()) {
+            OutlinedButton(
+                onClick = {
+                    showDeleteConfirm = true
+                },
+                enabled = removableSelection.isNotEmpty(),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("删除选中作息表", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
+            }
         }
     }
     if (showDeleteConfirm) {
@@ -1544,7 +1859,7 @@ private fun RestScheduleEditListPage(
             onDismissRequest = { showDeleteConfirm = false },
             shape = RoundedCornerShape(24.dp),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("删除作息表？") },
+            title = { DialogTitle("删除作息表？", onDismiss = { showDeleteConfirm = false }) },
             text = {
                 Text(
                     "确定删除选中的 ${deleteCount} 个作息表吗？此操作无法撤销。",
@@ -1561,11 +1876,6 @@ private fun RestScheduleEditListPage(
                 ) {
                     Text("删除", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text("取消", color = Color(0xFF8F878C))
-                }
             }
         )
     }
@@ -1577,20 +1887,58 @@ private fun RestScheduleViewPage(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
-            profile?.slots.orEmpty().sortedBy { it.period }.forEachIndexed { index, slot ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(slotLabel(slot.period), color = Color(0xFF303036), style = MaterialTheme.typography.titleMedium)
-                    Text(slot.displayRange(), color = Color(0xFF8F878C), style = MaterialTheme.typography.bodyMedium)
-                }
-                if (index != profile?.slots.orEmpty().lastIndex) {
-                    HorizontalDivider(color = Color(0xFFF3E4DE))
+            val slots = profile?.slots.orEmpty().sortedBy { it.period }
+            if (profile == null) {
+                EmptySettingsState(
+                    title = "暂无作息表",
+                    description = "请先新增一个作息表。"
+                )
+            } else if (slots.isEmpty()) {
+                EmptySettingsState(
+                    title = "暂无作息时间",
+                    description = "请在编辑作息表中添加作息时间。"
+                )
+            } else {
+                slots.forEach { slot ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(slotLabel(slot.period), color = Color(0xFF303036), style = MaterialTheme.typography.titleMedium)
+                        Text(slot.displayRange(), color = Color(0xFF8F878C), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EmptySettingsState(
+    title: String,
+    description: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(126.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = Color(0xFF303036),
+            fontWeight = FontWeight.Normal
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFFAAA2A6),
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1733,7 +2081,6 @@ private fun LessonTimeEditPage(
         selectedProfile?.let { profile ->
             SettingsListGroup {
                 SettingsListRow(
-                    icon = Icons.Filled.Edit,
                     title = profile.name,
                     trailing = {
                         Text("修改名称", color = Color(0xFFE26786), style = MaterialTheme.typography.bodyMedium)
@@ -1791,7 +2138,6 @@ private fun LessonTimeEditPage(
                     context = context
                 )
             }
-            HorizontalDivider(color = Color(0xFFF3E4DE))
             Button(
                 onClick = {
                     localErrorText = null
@@ -1813,7 +2159,7 @@ private fun LessonTimeEditPage(
             onDismissRequest = { showRenameDialog = false },
             shape = RoundedCornerShape(24.dp),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("修改作息表名称") },
+            title = { DialogTitle("修改作息表名称", onDismiss = { showRenameDialog = false }) },
             text = {
                 OutlinedTextField(
                     value = profileName,
@@ -1847,11 +2193,6 @@ private fun LessonTimeEditPage(
                     }
                 ) {
                     Text("保存", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
-                    Text("取消", color = Color(0xFF8F878C))
                 }
             }
         )
@@ -1889,7 +2230,7 @@ private fun LessonTimeEditPage(
             onDismissRequest = { pendingSelfStudyOverwrite = null },
             shape = RoundedCornerShape(24.dp),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("覆盖${type.label}？") },
+            title = { DialogTitle("覆盖${type.label}？", onDismiss = { pendingSelfStudyOverwrite = null }) },
             text = {
                 Text(
                     "当前作息表中已经有${type.label}。是否用新的时间覆盖原${type.label}？",
@@ -1905,11 +2246,6 @@ private fun LessonTimeEditPage(
                 ) {
                     Text("覆盖", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingSelfStudyOverwrite = null }) {
-                    Text("取消", color = Color(0xFF8F878C))
-                }
             }
         )
     }
@@ -1918,7 +2254,7 @@ private fun LessonTimeEditPage(
             onDismissRequest = { pendingDeletePeriod = null },
             shape = RoundedCornerShape(24.dp),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("删除作息时间？") },
+            title = { DialogTitle("删除作息时间？", onDismiss = { pendingDeletePeriod = null }) },
             text = {
                 Text(
                     if (!isNewProfile && period in coursePeriods) {
@@ -1938,11 +2274,6 @@ private fun LessonTimeEditPage(
                 ) {
                     Text("继续删除", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeletePeriod = null }) {
-                    Text("取消", color = Color(0xFF8F878C))
-                }
             }
         )
     }
@@ -1959,53 +2290,45 @@ private fun PermissionSettingsPage(
     onRequestBatteryOptimization: () -> Unit,
     onRequestAutoStart: () -> Unit,
     onRefresh: () -> Unit,
-    onBackToAlarmSettings: () -> Unit
+    onBackToAlarmSettings: () -> Unit,
+    guideText: String
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "课程闹钟需要这些系统授权才能在锁屏、息屏或后台状态下准时响铃。",
+            text = guideText,
             style = MaterialTheme.typography.bodyMedium,
             color = Color(0xFF6F6468)
         )
         SettingsListGroup {
             PermissionListRow(
-                icon = Icons.Filled.Schedule,
                 title = "精确闹钟",
                 description = "允许应用按作息时间创建准时闹钟。",
                 granted = exactAlarmPermissionGranted,
                 actionLabel = if (exactAlarmPermissionGranted) "查看" else "去授权",
                 onClick = onRequestExactAlarmPermission
             )
-            HorizontalDivider(color = Color(0xFFF3E4DE))
             PermissionListRow(
-                icon = Icons.Filled.NotificationsActive,
                 title = "通知权限",
-                description = "允许闹钟响铃时显示提醒通知。",
+                description = "允许到点时显示课程通知、播放提示音或震动。",
                 granted = notificationPermissionGranted,
                 actionLabel = if (notificationPermissionGranted) "查看" else "去授权",
                 onClick = onRequestNotificationPermission
             )
-            HorizontalDivider(color = Color(0xFFF3E4DE))
             PermissionListRow(
-                icon = Icons.Filled.NotificationsActive,
                 title = "锁屏和横幅通知",
-                description = "请在课程提醒通知类别中打开锁屏通知、横幅或悬浮通知。",
+                description = "请在闹钟提醒、上课提醒通知类别中打开锁屏通知、横幅或悬浮通知。",
                 granted = null,
                 actionLabel = "去设置",
                 onClick = onRequestNotificationStyle
             )
-            HorizontalDivider(color = Color(0xFFF3E4DE))
             PermissionListRow(
-                icon = Icons.Filled.Security,
                 title = "忽略电池优化",
                 description = "允许系统休眠时保持闹钟投递更稳定。",
                 granted = batteryOptimizationIgnored,
                 actionLabel = if (batteryOptimizationIgnored) "查看" else "去授权",
                 onClick = onRequestBatteryOptimization
             )
-            HorizontalDivider(color = Color(0xFFF3E4DE))
             PermissionListRow(
-                icon = Icons.Filled.Settings,
                 title = "自启动与后台运行",
                 description = "部分手机需要在系统管家里允许自启动、后台运行或无限制耗电。",
                 granted = null,
@@ -2027,14 +2350,31 @@ private fun PermissionSettingsPage(
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("返回课程闹钟", fontWeight = FontWeight.Bold)
+            Text("返回通知", fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun permissionGuideText(
+    reason: String?,
+    exactAlarmPermissionGranted: Boolean,
+    notificationPermissionGranted: Boolean,
+    batteryOptimizationIgnored: Boolean
+): String {
+    return when (reason) {
+        "exact" -> "通知功能无法正常使用。请先完成必要的系统权限授权，授权后返回通知页，再打开需要的提醒方式。"
+        "notification" -> "通知功能无法正常使用。请先完成必要的系统权限授权，否则到点时无法在锁屏和通知栏显示上课提醒。授权后返回通知页继续开启提醒。"
+        else -> when {
+            !exactAlarmPermissionGranted -> "课程提醒需要精确闹钟权限，才能按作息时间准时触发。"
+            !notificationPermissionGranted -> "课程提醒需要通知权限，才能在锁屏和通知栏显示上课提醒。"
+            !batteryOptimizationIgnored -> "基础权限已完成。为了减少息屏延迟，可继续允许忽略电池优化和后台运行。"
+            else -> "系统权限状态正常。你也可以按手机系统要求检查锁屏通知、自启动和后台运行设置。"
         }
     }
 }
 
 @Composable
 private fun PermissionListRow(
-    icon: ImageVector,
     title: String,
     description: String,
     granted: Boolean?,
@@ -2052,12 +2392,6 @@ private fun PermissionListRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color(0xFFE26786),
-                modifier = Modifier.size(26.dp)
-            )
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
@@ -2071,7 +2405,7 @@ private fun PermissionListRow(
             text = description,
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFF8F878C),
-            modifier = Modifier.padding(start = 38.dp)
+            modifier = Modifier.padding(end = 4.dp)
         )
         TextButton(
             onClick = onClick,
@@ -2133,7 +2467,8 @@ private data class StatusBadgeStyle(
 @Composable
 private fun ReminderMinuteField(
     value: String,
-    onValueChange: (String) -> Unit
+    onValueChange: (String) -> Unit,
+    enabled: Boolean = true
 ) {
     Surface(
         modifier = Modifier
@@ -2149,6 +2484,7 @@ private fun ReminderMinuteField(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
+                enabled = enabled,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -2293,8 +2629,10 @@ private fun SettingsListGroup(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun SettingsListRow(
-    icon: ImageVector,
+    icon: ImageVector? = null,
     title: String,
+    description: String? = null,
+    enabled: Boolean = true,
     trailing: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
@@ -2302,7 +2640,7 @@ private fun SettingsListRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (onClick == null) {
+                if (onClick == null || !enabled) {
                     Modifier
                 } else {
                     Modifier.clickable(
@@ -2313,29 +2651,161 @@ private fun SettingsListRow(
                     }
                 }
             )
-            .padding(vertical = 18.dp),
+            .alpha(if (enabled) 1f else 0.45f)
+            .padding(vertical = if (description == null) 18.dp else 14.dp),
         horizontalArrangement = Arrangement.spacedBy(18.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = Color(0xFFE26786),
-            modifier = Modifier.size(30.dp)
-        )
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = Color(0xFF303036),
-            fontWeight = FontWeight.Normal,
-            modifier = Modifier.weight(1f)
-        )
+        icon?.let {
+            Icon(
+                imageVector = it,
+                contentDescription = null,
+                tint = Color(0xFFE26786),
+                modifier = Modifier.size(30.dp)
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xFF303036),
+                fontWeight = FontWeight.Normal
+            )
+            description?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFAAA2A6)
+                )
+            }
+        }
         if (trailing == null) {
             ThinChevronRightIcon(modifier = Modifier.size(18.dp), color = Color(0xFFB8B1B5))
         } else {
             trailing()
         }
     }
+}
+
+@Composable
+private fun SettingsSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true
+) {
+    val trackColor = if (checked) Color(0xFFF6D2DE) else Color(0xFFC9CCCD)
+    val thumbColor = if (checked) Color(0xFFE86D8C) else Color(0xFFF8EEF2)
+    Box(
+        modifier = Modifier
+            .size(width = 54.dp, height = 32.dp)
+            .alpha(if (enabled) 1f else 0.55f)
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                onCheckedChange(!checked)
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 48.dp, height = 20.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(trackColor)
+        )
+        Box(
+            modifier = Modifier
+                .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
+                .size(30.dp)
+                .shadow(
+                    elevation = 2.dp,
+                    shape = CircleShape,
+                    clip = false,
+                    ambientColor = Color(0x33000000),
+                    spotColor = Color(0x33000000)
+                )
+                .clip(CircleShape)
+                .background(thumbColor)
+        )
+    }
+}
+
+@Composable
+private fun SoundTonePickerDialog(
+    selectedToneId: String,
+    onSelectTone: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = Color(0xFFFFFCFA),
+        title = { DialogTitle("提示音设置", onDismiss = onDismiss) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReminderTone.OPTIONS.forEach { tone ->
+                    val selected = ReminderTone.resolve(selectedToneId).id == tone.id
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = if (selected) Color(0xFFFFEEF4) else Color.Transparent,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                onSelectTone(tone.id)
+                                onDismiss()
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = tone.label,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color(0xFF303036),
+                                    fontWeight = FontWeight.Normal
+                                )
+                                if (selected) {
+                                    Text(
+                                        text = "当前使用",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFE26786)
+                                    )
+                                }
+                            }
+                            TextButton(
+                                onClick = { AlarmPlaybackManager.previewReminderTone(context, tone.id) },
+                                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFE26786)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Text("试听", fontWeight = FontWeight.SemiBold)
+                            }
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE26786),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
 }
 
 @Composable
@@ -2419,13 +2889,37 @@ private fun ThinCloseIcon(
 }
 
 @Composable
-private fun DialogTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleLarge,
-        color = Color(0xFF202023),
-        fontWeight = FontWeight.Black
-    )
+private fun DialogTitle(
+    text: String,
+    onDismiss: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFF202023),
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.weight(1f)
+        )
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    onDismiss()
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            ThinCloseIcon(modifier = Modifier.size(18.dp), color = Color(0xFF8F878C))
+        }
+    }
 }
 
 @Composable
@@ -2446,7 +2940,7 @@ private fun AddLessonTimeDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
         containerColor = Color(0xFFFFFCFA),
-        title = { DialogTitle("新增作息时间") },
+        title = { DialogTitle("新增作息时间", onDismiss = onDismiss) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
@@ -2533,11 +3027,6 @@ private fun AddLessonTimeDialog(
             TextButton(onClick = onSave) {
                 Text("保存", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消", color = Color(0xFF8F878C))
-            }
         }
     )
 }
@@ -2579,6 +3068,7 @@ private fun TimePickerButton(
 private fun CourseEditorDialog(
     teacher: String,
     lessonTimes: List<LessonTimeSlot>,
+    classPresets: List<String>,
     course: CourseItem?,
     defaultDay: DayOfWeek,
     onDismiss: () -> Unit,
@@ -2619,12 +3109,7 @@ private fun CourseEditorDialog(
                 Text(if (course == null) "新增" else "保存", fontWeight = FontWeight.Bold)
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消", color = Color(0xFFE26786))
-            }
-        },
-        title = { DialogTitle(if (course == null) "新增课程" else "编辑课程") },
+        title = { DialogTitle(if (course == null) "新增课程" else "编辑课程", onDismiss = onDismiss) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
@@ -2655,6 +3140,12 @@ private fun CourseEditorDialog(
                         unfocusedContainerColor = Color(0xFFFFF7F4)
                     )
                 )
+                if (classPresets.isNotEmpty()) {
+                    ClassPresetDropdown(
+                        presets = classPresets,
+                        onSelect = { className = it }
+                    )
+                }
                 PeriodDropdown(
                     selectedPeriod = selectedPeriod,
                     lessonTimes = lessonTimes,
@@ -2707,15 +3198,53 @@ private fun PeriodDropdown(
     }
 }
 
+@Composable
+private fun ClassPresetDropdown(
+    presets: List<String>,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.dp, Color(0xFFF0DDD2))
+        ) {
+            Text(
+                text = "选择预设班级",
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFE26786)
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            presets.forEach { preset ->
+                DropdownMenuItem(
+                    text = { Text(preset) },
+                    onClick = {
+                        onSelect(preset)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
 private fun openExactAlarmPermission(context: Context) {
     SystemAlarmScheduler.openExactAlarmPermissionSettings(context)
 }
 
 private fun requestNotificationPermission(
+    context: Context,
     launcher: androidx.activity.result.ActivityResultLauncher<String>
 ) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    if (SystemAlarmScheduler.canPostNotifications(context)) {
+        SystemAlarmScheduler.openAppNotificationSettings(context)
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        SystemAlarmScheduler.openAppNotificationSettings(context)
     }
 }
 
@@ -2752,7 +3281,7 @@ private fun isPermissionGuideMessage(message: String): Boolean {
 
 private fun dialogTitleForMessage(message: String, isPermissionGuide: Boolean): String {
     return when {
-        isPermissionGuide -> "请先完成权限设置"
+        isPermissionGuide -> "请先完成系统权限"
         message.startsWith("导入失败") -> "导入失败"
         message.contains("数据已导入") || message.contains("已移除") -> "导入成功"
         else -> "出错了"

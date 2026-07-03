@@ -13,19 +13,26 @@ import java.time.LocalTime
 data class AppDataTransferPayload(
     val schedule: WeeklySchedule,
     val profiles: List<LessonTimeProfile>,
-    val activeProfileId: String
+    val activeProfileId: String,
+    val classPresets: List<String> = emptyList()
 )
 
 object AppDataTransfer {
     private const val FORMAT_VERSION = 1
     private const val FORMAT_TYPE = "appData"
 
-    fun toJson(schedule: WeeklySchedule, profiles: List<LessonTimeProfile>, activeProfileId: String): String {
+    fun toJson(
+        schedule: WeeklySchedule,
+        profiles: List<LessonTimeProfile>,
+        activeProfileId: String,
+        classPresets: List<String>
+    ): String {
         return JSONObject()
             .put("version", FORMAT_VERSION)
             .put("app", "湘约一课")
             .put("type", FORMAT_TYPE)
             .put("activeLessonTimeProfileId", activeProfileId)
+            .put("classPresets", classPresetsToJson(classPresets))
             .put("courses", coursesToJson(schedule.items))
             .put("lessonTimeProfiles", profilesToJson(profiles))
             .toString(2)
@@ -52,8 +59,15 @@ object AppDataTransfer {
                 items = courses
             ),
             profiles = profiles,
-            activeProfileId = activeProfileId
+            activeProfileId = activeProfileId,
+            classPresets = parseClassPresets(root.optJSONArray("classPresets"))
         )
+    }
+
+    private fun classPresetsToJson(presets: List<String>): JSONArray {
+        return JSONArray().apply {
+            ScheduleRepository.normalizeClassPresets(presets).forEach { put(it) }
+        }
     }
 
     private fun coursesToJson(items: List<CourseItem>): JSONArray {
@@ -128,6 +142,15 @@ object AppDataTransfer {
                 )
             }
         }.distinctBy { it.id }
+    }
+
+    private fun parseClassPresets(array: JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                add(array.optString(index))
+            }
+        }.let(ScheduleRepository::normalizeClassPresets)
     }
 
     private fun parseLessonTimes(array: JSONArray?): List<LessonTimeSlot> {

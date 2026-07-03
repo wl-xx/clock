@@ -45,16 +45,16 @@ object SystemAlarmScheduler {
         now: LocalDateTime = LocalDateTime.now()
     ): AlarmResult {
         val normalized = settings.normalized()
-        if (!normalized.alarmModeEnabled) {
+        if (!normalized.hasEnabledReminder()) {
             cancelAllScheduledAlarms(context)
             AlarmWatchdogWorker.cancel(context)
-            // 关闭课程闹钟只停止响铃调度；今日课程前台通知仍保持运行。
+            // 关闭课程提醒只停止到点提醒调度；今日课程前台通知仍保持运行。
             AlarmForegroundService.start(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            return AlarmResult(false, "闹钟模式未开启。")
+            return AlarmResult(false, "课程提醒未开启。")
         }
-        // 闹钟模式开启：启动常驻前台守护服务（不休眠，绕过 ColorOS 对 AlarmManager 的压制）。
+        // 提醒开启：启动常驻前台守护服务（不休眠，绕过 ColorOS 对 AlarmManager 的压制）。
         AlarmForegroundService.start(context)
         val reminders = buildUpcomingReminders(
             context = context,
@@ -65,14 +65,14 @@ object SystemAlarmScheduler {
         )
         if (reminders.isEmpty()) {
             cancelAllScheduledAlarms(context)
-            // 闹钟模式仍开启，只是暂无后续课程；保留看门狗，让它稍后重新评估。
+            // 提醒仍开启，只是暂无后续课程；保留看门狗，让它稍后重新评估。
             AlarmWatchdogWorker.enqueue(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             return AlarmResult(false, "暂无需要提醒的后续课程。")
         }
 
-        // 一次性预排未来多节课程闹钟，每节使用独立 requestCode。
+        // 一次性预排未来多节课程提醒，每节使用独立 requestCode。
         // 这样任一次触发在息屏/Doze 下失败或延迟都不会影响其余闹钟，
         // 不再依赖“上一节响完再补排”的脆弱链条。
         cancelAllScheduledAlarms(context)
@@ -139,42 +139,45 @@ object SystemAlarmScheduler {
 
     fun ensureAlarmNotificationChannel(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (manager.getNotificationChannel(AlarmReminderReceiver.CHANNEL_ID) != null) {
-            return
-        }
         val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
         val alarmAttributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
-        manager.createNotificationChannel(
-            NotificationChannel(
-                AlarmReminderReceiver.CHANNEL_ID,
-                "课程提醒",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "课程闹钟提醒，请开启锁屏通知和横幅通知。"
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 600, 300, 600)
-                setSound(alarmSound, alarmAttributes)
-            }
-        )
+        if (manager.getNotificationChannel(AlarmReminderReceiver.ALARM_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    AlarmReminderReceiver.ALARM_CHANNEL_ID,
+                    "闹钟提醒",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "闹钟提醒，请开启锁屏通知和横幅通知。"
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    enableVibration(false)
+                    setSound(alarmSound, alarmAttributes)
+                }
+            )
+        }
+        if (manager.getNotificationChannel(AlarmReminderReceiver.VIBRATION_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    AlarmReminderReceiver.VIBRATION_CHANNEL_ID,
+                    "上课提醒",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "到点时显示上课提醒通知，震动和提示音由应用设置控制。"
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    enableVibration(false)
+                    setSound(null, null)
+                }
+            )
+        }
     }
 
     fun openAlarmNotificationChannelSettings(context: Context): Boolean {
         ensureAlarmNotificationChannel(context)
-        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
-            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            putExtra(Settings.EXTRA_CHANNEL_ID, AlarmReminderReceiver.CHANNEL_ID)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        val canHandle = intent.resolveActivity(context.packageManager) != null
-        if (canHandle) {
-            context.startActivity(intent)
-        }
-        return canHandle || openAppNotificationSettings(context)
+        return openAppNotificationSettings(context)
     }
 
     fun openAppNotificationSettings(context: Context): Boolean {
@@ -184,9 +187,14 @@ object SystemAlarmScheduler {
         }
         val canHandle = intent.resolveActivity(context.packageManager) != null
         if (canHandle) {
-            context.startActivity(intent)
+            val launched = runCatching {
+                context.startActivity(intent)
+            }.onFailure {
+                Log.d(TAG, "app notification settings intent failed", it)
+            }.isSuccess
+            if (launched) return true
         }
-        return canHandle || openAppDetailsSettings(context)
+        return openAppDetailsSettings(context)
     }
 
     fun openBatteryOptimizationSettings(context: Context): Boolean {

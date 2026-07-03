@@ -5,8 +5,16 @@ import com.example.pinkschedule.model.LessonTimeSlot
 import com.example.pinkschedule.model.ScheduleDefaults
 import java.time.Duration
 import java.time.LocalDateTime
+import java.time.ZoneId
 
 object TodayCourseSummary {
+    data class ForegroundNotificationSnapshot(
+        val title: String,
+        val text: String,
+        val stableKey: String,
+        val countdownTargetEpochMillis: Long?
+    )
+
     fun notificationText(
         items: List<CourseItem>,
         lessonTimes: List<LessonTimeSlot>,
@@ -34,6 +42,50 @@ object TodayCourseSummary {
         now: LocalDateTime = LocalDateTime.now()
     ): String {
         return "今日课程：${notificationText(items, lessonTimes, now)}。"
+    }
+
+    fun foregroundNotificationSnapshot(
+        items: List<CourseItem>,
+        lessonTimes: List<LessonTimeSlot>,
+        now: LocalDateTime = LocalDateTime.now()
+    ): ForegroundNotificationSnapshot {
+        val summary = nearestNotEndedCourse(items, lessonTimes, now)
+            ?: return ForegroundNotificationSnapshot(
+                title = "今日课程",
+                text = "暂无未结束课程",
+                stableKey = "empty|${now.toLocalDate()}",
+                countdownTargetEpochMillis = null
+            )
+        val courseText = listOf(
+            summary.course.courseName.ifBlank { "课程" },
+            summary.course.className.ifBlank { "未填写班级" },
+            ScheduleDefaults.periodLabel(summary.course.period),
+            summary.slot.displayRange()
+        ).joinToString(" · ")
+        val courseKey = listOf(
+            summary.course.dayOfWeek.name,
+            summary.course.period.toString(),
+            summary.startAt.toLocalDate().toString(),
+            summary.course.className
+        ).joinToString("|")
+        return if (summary.started) {
+            ForegroundNotificationSnapshot(
+                title = "正在上课",
+                text = courseText,
+                stableKey = "started|$courseKey",
+                countdownTargetEpochMillis = null
+            )
+        } else {
+            ForegroundNotificationSnapshot(
+                title = "距离上课",
+                text = courseText,
+                stableKey = "upcoming|$courseKey|${summary.startAt}",
+                countdownTargetEpochMillis = summary.startAt
+                    .atZone(ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+            )
+        }
     }
 
     private fun nearestNotEndedCourse(

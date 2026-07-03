@@ -16,9 +16,14 @@ import java.util.UUID
 object ScheduleRepository {
     private const val PREFS_NAME = "schedule_store"
     private const val KEY_SCHEDULE = "teacher_schedule"
+    private const val KEY_CLASS_PRESETS = "class_presets"
     private const val KEY_LESSON_TIME_PROFILES = "lesson_time_profiles"
     private const val KEY_ACTIVE_LESSON_TIME_PROFILE_ID = "active_lesson_time_profile_id"
+    private const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
     private const val KEY_ALARM_MODE_ENABLED = "alarm_mode_enabled"
+    private const val KEY_VIBRATION_REMINDER_ENABLED = "vibration_reminder_enabled"
+    private const val KEY_SOUND_REMINDER_ENABLED = "sound_reminder_enabled"
+    private const val KEY_SOUND_REMINDER_TONE_ID = "sound_reminder_tone_id"
     private const val KEY_REMINDER_MINUTES = "reminder_minutes"
     private const val KEY_LAST_ALARM_SIGNATURE = "last_alarm_signature"
     private const val KEY_DELIVERED_ALARM_SIGNATURES = "delivered_alarm_signatures"
@@ -65,6 +70,37 @@ object ScheduleRepository {
                 }
             }
         }.getOrDefault(emptyList())
+    }
+
+    fun saveClassPresets(context: Context, presets: List<String>) {
+        val serialized = JSONArray().apply {
+            normalizeClassPresets(presets).forEach { put(it) }
+        }.toString()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_CLASS_PRESETS, serialized)
+            .apply()
+    }
+
+    fun loadClassPresets(context: Context): List<String> {
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_CLASS_PRESETS, null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    add(array.optString(index))
+                }
+            }
+        }.getOrDefault(emptyList()).let(::normalizeClassPresets)
+    }
+
+    fun normalizeClassPresets(presets: List<String>): List<String> {
+        return presets
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it })
     }
 
     fun saveLessonTimes(context: Context, lessonTimes: List<LessonTimeSlot>) {
@@ -212,7 +248,11 @@ object ScheduleRepository {
         val normalized = settings.normalized()
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
+            .putBoolean(KEY_NOTIFICATIONS_ENABLED, normalized.notificationsEnabled)
             .putBoolean(KEY_ALARM_MODE_ENABLED, normalized.alarmModeEnabled)
+            .putBoolean(KEY_VIBRATION_REMINDER_ENABLED, normalized.vibrationReminderEnabled)
+            .putBoolean(KEY_SOUND_REMINDER_ENABLED, normalized.soundReminderEnabled)
+            .putString(KEY_SOUND_REMINDER_TONE_ID, normalized.soundReminderToneId)
             .putInt(KEY_REMINDER_MINUTES, normalized.reminderMinutesBefore)
             .apply()
     }
@@ -220,7 +260,11 @@ object ScheduleRepository {
     fun loadReminderSettings(context: Context): ReminderSettings {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return ReminderSettings(
+            notificationsEnabled = prefs.getBoolean(KEY_NOTIFICATIONS_ENABLED, true),
             alarmModeEnabled = prefs.getBoolean(KEY_ALARM_MODE_ENABLED, false),
+            vibrationReminderEnabled = prefs.getBoolean(KEY_VIBRATION_REMINDER_ENABLED, false),
+            soundReminderEnabled = prefs.getBoolean(KEY_SOUND_REMINDER_ENABLED, false),
+            soundReminderToneId = prefs.getString(KEY_SOUND_REMINDER_TONE_ID, null).orEmpty(),
             reminderMinutesBefore = prefs.getInt(
                 KEY_REMINDER_MINUTES,
                 ScheduleDefaults.DEFAULT_REMINDER_MINUTES

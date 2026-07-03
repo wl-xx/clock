@@ -36,6 +36,7 @@ data class ScheduleUiState(
     val lessonTimes: List<LessonTimeSlot> = emptyList(),
     val lessonTimeProfiles: List<LessonTimeProfile> = emptyList(),
     val activeLessonTimeProfileId: String = "",
+    val classPresets: List<String> = emptyList(),
     val reminderSettings: ReminderSettings = ReminderSettings(),
     val exactAlarmPermissionGranted: Boolean = true,
     val notificationPermissionGranted: Boolean = true,
@@ -164,16 +165,29 @@ class ScheduleViewModel(
         saveProfileLessonTimes(profileId, updated, "已删除${ScheduleDefaults.periodLabel(period)}作息时间。", schedule)
     }
 
-    fun updateReminderSettings(alarmModeEnabled: Boolean, minutesBefore: Int): ReminderSettingsAction {
+    fun updateReminderSettings(
+        notificationsEnabled: Boolean,
+        alarmModeEnabled: Boolean,
+        vibrationReminderEnabled: Boolean,
+        soundReminderEnabled: Boolean,
+        soundReminderToneId: String,
+        minutesBefore: Int
+    ): ReminderSettingsAction {
         if (minutesBefore < 0) {
             return ReminderSettingsAction(
                 message = "提醒前时间不能小于 0 分钟。"
             )
         }
+        val anyReminderEnabled = notificationsEnabled &&
+            (alarmModeEnabled || vibrationReminderEnabled || soundReminderEnabled)
         val hasExactAlarmPermission = SystemAlarmScheduler.canUseExactAlarms(context)
-        if (alarmModeEnabled && !hasExactAlarmPermission) {
+        if (anyReminderEnabled && !hasExactAlarmPermission) {
             val disabledSettings = ReminderSettings(
+                notificationsEnabled = notificationsEnabled,
                 alarmModeEnabled = false,
+                vibrationReminderEnabled = false,
+                soundReminderEnabled = false,
+                soundReminderToneId = soundReminderToneId,
                 reminderMinutesBefore = minutesBefore
             ).normalized()
             return runCatching {
@@ -186,10 +200,10 @@ class ScheduleViewModel(
                     reminderSettings = disabledSettings,
                     exactAlarmPermissionGranted = false,
                     notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
-                    message = "未授予精确闹钟权限，课程提醒无法保证准时，请先完成授权。"
+                    message = "通知功能无法正常使用，请先完成必要的系统权限授权。"
                 )
                 ReminderSettingsAction(
-                    message = "未授予精确闹钟权限，课程提醒无法保证准时，请先完成授权。",
+                    message = "通知功能无法正常使用，请先完成必要的系统权限授权。",
                     requestExactAlarmPermission = true
                 )
             }.getOrElse {
@@ -197,9 +211,13 @@ class ScheduleViewModel(
             }
         }
         val hasNotificationPermission = SystemAlarmScheduler.canPostNotifications(context)
-        if (alarmModeEnabled && !hasNotificationPermission) {
+        if (anyReminderEnabled && !hasNotificationPermission) {
             val disabledSettings = ReminderSettings(
+                notificationsEnabled = notificationsEnabled,
                 alarmModeEnabled = false,
+                vibrationReminderEnabled = false,
+                soundReminderEnabled = false,
+                soundReminderToneId = soundReminderToneId,
                 reminderMinutesBefore = minutesBefore
             ).normalized()
             return runCatching {
@@ -212,10 +230,10 @@ class ScheduleViewModel(
                     reminderSettings = disabledSettings,
                     exactAlarmPermissionGranted = hasExactAlarmPermission,
                     notificationPermissionGranted = false,
-                    message = "未授予通知权限，提醒无法显示，请先完成授权。"
+                    message = "通知功能无法正常使用，请先完成必要的系统权限授权。"
                 )
                 ReminderSettingsAction(
-                    message = "未授予通知权限，提醒无法显示，请先完成授权。",
+                    message = "通知功能无法正常使用，请先完成必要的系统权限授权。",
                     requestNotificationPermission = true
                 )
             }.getOrElse {
@@ -227,25 +245,29 @@ class ScheduleViewModel(
         // 否则息屏放置时系统会推迟 setAlarmClock 的投递（表现为“亮屏才响”）。
         val ignoringBatteryOptimizations = SystemAlarmScheduler.isIgnoringBatteryOptimizations(context)
         val settings = ReminderSettings(
+            notificationsEnabled = notificationsEnabled,
             alarmModeEnabled = alarmModeEnabled,
+            vibrationReminderEnabled = vibrationReminderEnabled,
+            soundReminderEnabled = soundReminderEnabled,
+            soundReminderToneId = soundReminderToneId,
             reminderMinutesBefore = minutesBefore
         ).normalized()
         return runCatching {
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             ScheduleRepository.saveReminderSettings(context, settings)
-            val alarmMessage = if (settings.alarmModeEnabled) {
+            val alarmMessage = if (settings.hasEnabledReminder()) {
                 refreshScheduledAlarms(
                     schedule = _uiState.value.schedule,
                     lessonTimes = _uiState.value.lessonTimes,
                     settings = settings
                 ).message
             } else {
-                "已关闭闹钟模式。"
+                "已关闭课程提醒。"
             }
-            val needBatteryPrompt = settings.alarmModeEnabled && !ignoringBatteryOptimizations
+            val needBatteryPrompt = settings.hasEnabledReminder() && !ignoringBatteryOptimizations
             // 自启动/后台冻结等保活项无法用 API 检测，只在首次开启闹钟、且电池优化不需要弹框时引导一次，
             // 避免与电池优化系统框叠加。
-            val needAutoStartPrompt = settings.alarmModeEnabled &&
+            val needAutoStartPrompt = settings.hasEnabledReminder() &&
                 !needBatteryPrompt &&
                 !ScheduleRepository.hasPromptedAutoStart(context)
             if (needAutoStartPrompt) {
@@ -295,7 +317,8 @@ class ScheduleViewModel(
         return AppDataTransfer.toJson(
             schedule = state.schedule,
             profiles = state.lessonTimeProfiles,
-            activeProfileId = state.activeLessonTimeProfileId
+            activeProfileId = state.activeLessonTimeProfileId,
+            classPresets = state.classPresets
         )
     }
 
@@ -315,10 +338,11 @@ class ScheduleViewModel(
             val reminderSettings = _uiState.value.reminderSettings
             ScheduleRepository.saveLessonTimeProfiles(context, payload.profiles, payload.activeProfileId)
             ScheduleRepository.save(context, schedule)
+            ScheduleRepository.saveClassPresets(context, payload.classPresets)
             ScheduleRepository.clearDeliveredAlarmSignatures(context)
             ScheduleRepository.saveLastAlarmSignature(context, null)
             val importMessage = "数据已导入。"
-            val alarmMessage = if (reminderSettings.alarmModeEnabled) {
+            val alarmMessage = if (reminderSettings.hasEnabledReminder()) {
                 refreshScheduledAlarms(schedule, activeSlots, reminderSettings).message
             } else {
                 null
@@ -333,6 +357,7 @@ class ScheduleViewModel(
                 lessonTimes = activeSlots,
                 lessonTimeProfiles = payload.profiles,
                 activeLessonTimeProfileId = payload.activeProfileId,
+                classPresets = payload.classPresets,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
@@ -361,7 +386,7 @@ class ScheduleViewModel(
                 reminderSettings = _uiState.value.reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                message = if (_uiState.value.reminderSettings.alarmModeEnabled) {
+                message = if (_uiState.value.reminderSettings.hasEnabledReminder()) {
                     refreshScheduledAlarms(_uiState.value.schedule, merged, _uiState.value.reminderSettings).message
                 } else {
                     "已切换到${target.name}。"
@@ -428,7 +453,7 @@ class ScheduleViewModel(
             lessonTimeProfiles = updated,
             activeLessonTimeProfileId = activeId,
             lessonTimes = activeSlots,
-            message = if (reminderSettings.alarmModeEnabled) {
+            message = if (reminderSettings.hasEnabledReminder()) {
                 ScheduleRepository.clearDeliveredAlarmSignatures(context)
                 ScheduleRepository.saveLastAlarmSignature(context, null)
                 refreshScheduledAlarms(_uiState.value.schedule, activeSlots, reminderSettings).message
@@ -462,6 +487,42 @@ class ScheduleViewModel(
         )
     }
 
+    fun addClassPreset(name: String): String? {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) {
+            return "班级名称不能为空。"
+        }
+        if (_uiState.value.classPresets.any { it.equals(trimmed, ignoreCase = true) }) {
+            return "班级名称已存在。"
+        }
+        val updated = ScheduleRepository.normalizeClassPresets(_uiState.value.classPresets + trimmed)
+        ScheduleRepository.saveClassPresets(context, updated)
+        _uiState.value = _uiState.value.copy(classPresets = updated, message = "已新增班级。")
+        return null
+    }
+
+    fun renameClassPreset(original: String, updatedName: String): String? {
+        val trimmed = updatedName.trim()
+        if (trimmed.isBlank()) {
+            return "班级名称不能为空。"
+        }
+        if (_uiState.value.classPresets.any { !it.equals(original, ignoreCase = true) && it.equals(trimmed, ignoreCase = true) }) {
+            return "班级名称已存在。"
+        }
+        val updated = ScheduleRepository.normalizeClassPresets(
+            _uiState.value.classPresets.map { if (it == original) trimmed else it }
+        )
+        ScheduleRepository.saveClassPresets(context, updated)
+        _uiState.value = _uiState.value.copy(classPresets = updated, message = "已更新班级。")
+        return null
+    }
+
+    fun deleteClassPreset(name: String) {
+        val updated = _uiState.value.classPresets.filterNot { it == name }
+        ScheduleRepository.saveClassPresets(context, updated)
+        _uiState.value = _uiState.value.copy(classPresets = updated, message = "已删除班级。")
+    }
+
     private suspend fun hydrateLocalState() {
         val storedSchedule = withContext(Dispatchers.IO) {
             normalizeCourses(ScheduleRepository.load(context))
@@ -489,6 +550,9 @@ class ScheduleViewModel(
         val reminderSettings = withContext(Dispatchers.IO) {
             ScheduleRepository.loadReminderSettings(context)
         }
+        val classPresets = withContext(Dispatchers.IO) {
+            ScheduleRepository.loadClassPresets(context)
+        }
         if (storedSchedule.isNotEmpty()) {
             val schedule = WeeklySchedule(
                 teacher = storedSchedule.first().teacher.ifBlank { ScheduleDefaults.DEFAULT_TEACHER },
@@ -502,6 +566,7 @@ class ScheduleViewModel(
                 lessonTimes = lessonTimes,
                 lessonTimeProfiles = lessonTimeProfiles,
                 activeLessonTimeProfileId = activeLessonTimeProfileId,
+                classPresets = classPresets,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = SystemAlarmScheduler.canUseExactAlarms(context),
                 notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
@@ -511,6 +576,7 @@ class ScheduleViewModel(
                 lessonTimes = lessonTimes,
                 lessonTimeProfiles = lessonTimeProfiles,
                 activeLessonTimeProfileId = activeLessonTimeProfileId,
+                classPresets = classPresets,
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = SystemAlarmScheduler.canUseExactAlarms(context),
                 notificationPermissionGranted = SystemAlarmScheduler.canPostNotifications(context),
@@ -552,6 +618,7 @@ class ScheduleViewModel(
         lessonTimes: List<LessonTimeSlot>,
         lessonTimeProfiles: List<LessonTimeProfile>,
         activeLessonTimeProfileId: String,
+        classPresets: List<String> = _uiState.value.classPresets,
         reminderSettings: ReminderSettings,
         exactAlarmPermissionGranted: Boolean,
         notificationPermissionGranted: Boolean,
@@ -562,6 +629,7 @@ class ScheduleViewModel(
             lessonTimes = lessonTimes,
             lessonTimeProfiles = lessonTimeProfiles,
             activeLessonTimeProfileId = activeLessonTimeProfileId,
+            classPresets = classPresets,
             reminderSettings = reminderSettings,
             exactAlarmPermissionGranted = exactAlarmPermissionGranted,
             notificationPermissionGranted = notificationPermissionGranted,
@@ -601,7 +669,7 @@ class ScheduleViewModel(
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                message = if (reminderSettings.alarmModeEnabled) {
+                message = if (reminderSettings.hasEnabledReminder()) {
                     refreshScheduledAlarms(
                         schedule = _uiState.value.schedule,
                         lessonTimes = updated,
@@ -645,7 +713,7 @@ class ScheduleViewModel(
                 reminderSettings = reminderSettings,
                 exactAlarmPermissionGranted = _uiState.value.exactAlarmPermissionGranted,
                 notificationPermissionGranted = _uiState.value.notificationPermissionGranted,
-                message = if (reminderSettings.alarmModeEnabled) {
+                message = if (reminderSettings.hasEnabledReminder()) {
                     refreshScheduledAlarms(
                         schedule = schedule,
                         lessonTimes = activeSlots,

@@ -82,7 +82,8 @@ class AlarmReminderReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "AlarmReminderReceiver"
 
-        const val CHANNEL_ID = "lesson_alarm_v4"
+        const val ALARM_CHANNEL_ID = "lesson_alarm_v5"
+        const val VIBRATION_CHANNEL_ID = "lesson_course_notice_v2"
         const val EXTRA_CLASS_NAME = "extra_class_name"
         const val EXTRA_TIME_RANGE = "extra_time_range"
         const val EXTRA_PERIOD = "extra_period"

@@ -10,7 +10,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
+import android.view.View
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.pinkschedule.MainActivity
@@ -37,13 +40,14 @@ import java.time.temporal.TemporalAdjusters
  * 前台服务受系统保护、进程常驻不休眠，是国产 ROM 上息屏提醒最可靠的一层。
  * 它与 setAlarmClock + WorkManager 看门狗叠加，形成多层冗余——任一层失效仍有兜底。
  *
- * 注意：本服务始终负责展示今日课程；仅在课程闹钟开启时检测并触发响铃。
+ * 注意：本服务始终负责展示今日课程；仅在课程提醒开启时检测并触发到点提醒。
  * 去重复用 ScheduleRepository 的 delivered 签名，避免与 AlarmManager 路径重复响铃。
  */
 class AlarmForegroundService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var tickerJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var lastForegroundNotificationKey: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,14 +58,14 @@ class AlarmForegroundService : Service() {
         }
         ensureChannel()
         startAsForeground()
-        val alarmModeEnabled = ScheduleRepository.loadReminderSettings(applicationContext).alarmModeEnabled
-        if (alarmModeEnabled && wakeLock?.isHeld != true) {
+        val remindersEnabled = ScheduleRepository.loadReminderSettings(applicationContext).hasEnabledReminder()
+        if (remindersEnabled && wakeLock?.isHeld != true) {
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
                 setReferenceCounted(false)
                 acquire()
             }
-        } else if (!alarmModeEnabled && wakeLock?.isHeld == true) {
+        } else if (!remindersEnabled && wakeLock?.isHeld == true) {
             runCatching { wakeLock?.release() }
             wakeLock = null
         }
@@ -86,7 +90,7 @@ class AlarmForegroundService : Service() {
     /** 检查最近一节课的提醒时刻是否已到；到点则触发响铃并标记已投递。 */
     private fun checkAndFire() {
         val settings = ScheduleRepository.loadReminderSettings(applicationContext)
-        if (!settings.alarmModeEnabled) {
+        if (!settings.hasEnabledReminder()) {
             return
         }
         val items = ScheduleRepository.load(applicationContext)
@@ -155,7 +159,9 @@ class AlarmForegroundService : Service() {
     }
 
     private fun startAsForeground() {
-        val notification = buildForegroundNotification()
+        val snapshot = todayCourseSnapshot()
+        val notification = buildForegroundNotification(snapshot)
+        lastForegroundNotificationKey = snapshot.stableKey
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
@@ -165,40 +171,83 @@ class AlarmForegroundService : Service() {
     }
 
     private fun refreshForegroundNotification() {
+        val snapshot = todayCourseSnapshot()
+        if (snapshot.stableKey == lastForegroundNotificationKey) {
+            return
+        }
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildForegroundNotification())
+        manager.notify(NOTIFICATION_ID, buildForegroundNotification(snapshot))
+        lastForegroundNotificationKey = snapshot.stableKey
     }
 
-    private fun buildForegroundNotification(): android.app.Notification {
+    private fun buildForegroundNotification(
+        snapshot: TodayCourseSummary.ForegroundNotificationSnapshot
+    ): android.app.Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val contentText = todayCourseText()
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("今日课程")
-            .setContentText(contentText)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
+            .setContentText(fallbackContentText(snapshot))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(snapshot.text))
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .setShowWhen(false)
+            .setCustomContentView(buildForegroundRemoteViews(snapshot))
+            .setCustomBigContentView(buildForegroundRemoteViews(snapshot))
             .setContentIntent(contentIntent)
             .build()
-        return notification
     }
 
-    private fun todayCourseText(): String {
+    private fun buildForegroundRemoteViews(
+        snapshot: TodayCourseSummary.ForegroundNotificationSnapshot
+    ): RemoteViews {
+        val views = RemoteViews(packageName, R.layout.notification_today_course)
+        views.setTextViewText(R.id.notification_title, "今日课程")
+        views.setTextViewText(R.id.notification_status, snapshot.title)
+        views.setTextViewText(R.id.notification_detail, snapshot.text)
+        val countdownTarget = snapshot.countdownTargetEpochMillis
+        if (countdownTarget == null) {
+            views.setViewVisibility(R.id.notification_countdown, View.GONE)
+        } else {
+            val base = SystemClock.elapsedRealtime() + (countdownTarget - System.currentTimeMillis())
+            views.setViewVisibility(R.id.notification_countdown, View.VISIBLE)
+            views.setChronometer(R.id.notification_countdown, base, null, true)
+            views.setChronometerCountDown(R.id.notification_countdown, true)
+        }
+        return views
+    }
+
+    private fun fallbackContentText(
+        snapshot: TodayCourseSummary.ForegroundNotificationSnapshot
+    ): String {
+        return if (snapshot.countdownTargetEpochMillis == null) {
+            "${snapshot.title} · ${snapshot.text}"
+        } else {
+            "距离上课 · ${snapshot.text}"
+        }
+    }
+
+    private fun todayCourseSnapshot(): TodayCourseSummary.ForegroundNotificationSnapshot {
         return runCatching {
-            TodayCourseSummary.notificationText(
+            TodayCourseSummary.foregroundNotificationSnapshot(
                 items = ScheduleRepository.load(applicationContext),
                 lessonTimes = ScheduleRepository.loadLessonTimes(applicationContext),
                 now = LocalDateTime.now()
             )
-        }.getOrDefault("暂无未结束课程")
+        }.getOrDefault(
+            TodayCourseSummary.ForegroundNotificationSnapshot(
+                title = "今日课程",
+                text = "暂无未结束课程",
+                stableKey = "error",
+                countdownTargetEpochMillis = null
+            )
+        )
     }
 
     private fun ensureChannel() {
