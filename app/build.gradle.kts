@@ -1,7 +1,28 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun signingProperty(name: String): String? =
+    localProperties.getProperty(name)
+        ?: providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+
+val releaseStoreFile = signingProperty("RELEASE_STORE_FILE")
+val hasReleaseSigningConfig =
+    !releaseStoreFile.isNullOrBlank() &&
+        !signingProperty("RELEASE_STORE_PASSWORD").isNullOrBlank() &&
+        !signingProperty("RELEASE_KEY_ALIAS").isNullOrBlank() &&
+        !signingProperty("RELEASE_KEY_PASSWORD").isNullOrBlank()
 
 android {
     namespace = "com.example.pinkschedule"
@@ -20,9 +41,27 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = signingProperty("RELEASE_STORE_PASSWORD")
+                keyAlias = signingProperty("RELEASE_KEY_ALIAS")
+                keyPassword = signingProperty("RELEASE_KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
