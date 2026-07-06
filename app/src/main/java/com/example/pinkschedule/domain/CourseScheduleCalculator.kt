@@ -7,7 +7,7 @@ import java.time.LocalDateTime
 
 /** 前台通知展示的当前状态：无课 / 距上课倒计时 / 正在上课。 */
 sealed interface ReminderState {
-    data class NoCourse(val today: LocalDate) : ReminderState
+    data class NoCourse(val today: LocalDate, val reason: NoCourseReason) : ReminderState
 
     data class CountingDown(
         val course: CourseItem,
@@ -22,6 +22,11 @@ sealed interface ReminderState {
         val startAt: LocalDateTime,
         val endAt: LocalDateTime
     ) : ReminderState
+}
+
+enum class NoCourseReason {
+    NO_COURSES_TODAY,
+    COMPLETED_TODAY
 }
 
 /** 一次待排的课程提醒（AlarmManager 下发单元）。 */
@@ -134,7 +139,7 @@ object CourseScheduleCalculator {
                     course = item,
                     slot = slot,
                     startAt = LocalDateTime.of(date, slot.startTime),
-                    endAt = LocalDateTime.of(date, slot.endTime)
+                    endAt = effectiveEndAt(date, slot)
                 )
             }
         }
@@ -142,16 +147,26 @@ object CourseScheduleCalculator {
     }
 
     private fun currentState(occurrences: List<Occurrence>, now: LocalDateTime): ReminderState {
-        // 正在上课优先（startAt <= now <= endAt）。
-        occurrences.firstOrNull { !now.isBefore(it.startAt) && !now.isAfter(it.endAt) }?.let {
+        // 正在上课优先。课表终点时间按整分钟展示，状态切换在终点时间的下一分钟发生。
+        occurrences.firstOrNull { !now.isBefore(it.startAt) && now.isBefore(it.endAt) }?.let {
             return ReminderState.InClass(it.course, it.slot, it.startAt, it.endAt)
         }
         // 否则取今天还没开始的最近一节课；今天没有则为无课（跨天由午夜边界心跳刷新）。
         val today = now.toLocalDate()
-        occurrences.firstOrNull { it.startAt.isAfter(now) && it.startAt.toLocalDate() == today }?.let {
+        val todayOccurrences = occurrences.filter { it.startAt.toLocalDate() == today }
+        todayOccurrences.firstOrNull { it.startAt.isAfter(now) }?.let {
             return ReminderState.CountingDown(it.course, it.slot, it.startAt, it.endAt)
         }
-        return ReminderState.NoCourse(today)
+        val reason = if (todayOccurrences.isEmpty()) {
+            NoCourseReason.NO_COURSES_TODAY
+        } else {
+            NoCourseReason.COMPLETED_TODAY
+        }
+        return ReminderState.NoCourse(today, reason)
+    }
+
+    private fun effectiveEndAt(date: LocalDate, slot: LessonTimeSlot): LocalDateTime {
+        return LocalDateTime.of(date, slot.endTime).plusMinutes(1)
     }
 
     private fun upcomingReminders(

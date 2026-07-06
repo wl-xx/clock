@@ -124,9 +124,10 @@ class AlarmForegroundService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val contentTitle = if (snapshot.showCourseHeader) "今日课程" else snapshot.text
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("今日课程")
+            .setContentTitle(contentTitle)
             .setContentText(fallbackContentText(snapshot))
             .setStyle(NotificationCompat.BigTextStyle().bigText(snapshot.text))
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -143,8 +144,15 @@ class AlarmForegroundService : Service() {
         snapshot: TodayCourseSummary.ForegroundNotificationSnapshot
     ): RemoteViews {
         val views = RemoteViews(packageName, R.layout.notification_today_course)
-        views.setTextViewText(R.id.notification_title, "今日课程")
-        views.setTextViewText(R.id.notification_status, snapshot.title)
+        if (snapshot.showCourseHeader) {
+            views.setViewVisibility(R.id.notification_title, View.VISIBLE)
+            views.setViewVisibility(R.id.notification_countdown_row, View.VISIBLE)
+            views.setTextViewText(R.id.notification_title, "今日课程")
+            views.setTextViewText(R.id.notification_status, snapshot.title)
+        } else {
+            views.setViewVisibility(R.id.notification_title, View.GONE)
+            views.setViewVisibility(R.id.notification_countdown_row, View.GONE)
+        }
         views.setTextViewText(R.id.notification_detail, snapshot.text)
         val countdownTarget = snapshot.countdownTargetEpochMillis
         val remainingMs = countdownTarget?.let { it - System.currentTimeMillis() } ?: -1L
@@ -168,7 +176,9 @@ class AlarmForegroundService : Service() {
     private fun fallbackContentText(
         snapshot: TodayCourseSummary.ForegroundNotificationSnapshot
     ): String {
-        return if (snapshot.countdownTargetEpochMillis == null) {
+        return if (!snapshot.showCourseHeader) {
+            snapshot.text
+        } else if (snapshot.countdownTargetEpochMillis == null) {
             "${snapshot.title} · ${snapshot.text}"
         } else {
             "距离上课 · ${snapshot.text}"
@@ -187,9 +197,10 @@ class AlarmForegroundService : Service() {
         return domain?.let { runCatching { TodayCourseSummary.foregroundNotificationSnapshot(it) }.getOrNull() }
             ?: TodayCourseSummary.ForegroundNotificationSnapshot(
                 title = "今日课程",
-                text = "暂无未结束课程",
+                text = "今天没有课程安排，好好休息吧~",
                 stableKey = "error",
-                countdownTargetEpochMillis = null
+                countdownTargetEpochMillis = null,
+                showCourseHeader = false
             )
     }
 

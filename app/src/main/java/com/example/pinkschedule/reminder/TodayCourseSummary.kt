@@ -1,5 +1,6 @@
 package com.example.pinkschedule.reminder
 
+import com.example.pinkschedule.domain.NoCourseReason
 import com.example.pinkschedule.domain.ReminderState
 import com.example.pinkschedule.domain.ScheduleSnapshot
 import com.example.pinkschedule.model.CourseItem
@@ -17,16 +18,18 @@ object TodayCourseSummary {
         val title: String,
         val text: String,
         val stableKey: String,
-        val countdownTargetEpochMillis: Long?
+        val countdownTargetEpochMillis: Long?,
+        val showCourseHeader: Boolean = true
     )
 
     fun foregroundNotificationSnapshot(snapshot: ScheduleSnapshot): ForegroundNotificationSnapshot {
         return when (val state = snapshot.state) {
             is ReminderState.NoCourse -> ForegroundNotificationSnapshot(
                 title = "今日课程",
-                text = "暂无未结束课程",
-                stableKey = "empty|${state.today}",
-                countdownTargetEpochMillis = null
+                text = noCourseText(state.reason),
+                stableKey = "empty|${state.today}|${state.reason}",
+                countdownTargetEpochMillis = null,
+                showCourseHeader = false
             )
             is ReminderState.InClass -> ForegroundNotificationSnapshot(
                 title = "正在上课",
@@ -53,6 +56,13 @@ object TodayCourseSummary {
             ScheduleDefaults.periodLabel(course.period),
             slot.displayRange()
         ).joinToString(" · ")
+    }
+
+    private fun noCourseText(reason: NoCourseReason): String {
+        return when (reason) {
+            NoCourseReason.COMPLETED_TODAY -> "今天课程都结束了，辛苦啦，好好休息吧~"
+            NoCourseReason.NO_COURSES_TODAY -> "今天没有课程安排，好好休息吧~"
+        }
     }
 
     private fun courseKey(course: CourseItem, startAt: LocalDateTime): String {

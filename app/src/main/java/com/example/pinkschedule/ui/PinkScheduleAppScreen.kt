@@ -34,8 +34,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AddCircle
@@ -89,7 +87,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -110,10 +107,10 @@ import com.example.pinkschedule.reminder.AlarmPlaybackManager
 import com.example.pinkschedule.reminder.SystemAlarmScheduler
 import com.example.pinkschedule.reminder.SystemSettingsNavigator
 import com.example.pinkschedule.viewmodel.ScheduleViewModel
-import kotlinx.coroutines.delay
 import java.io.File
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
@@ -556,8 +553,7 @@ private fun CourseTimelineItem(
 ) {
     val slot = lessonTimes.firstOrNull { it.period == course.period }
     val timeText = slot?.displayRange().orEmpty()
-    val isCompletedToday = course.dayOfWeek == LocalDate.now().dayOfWeek &&
-        slot?.endTime?.isBefore(LocalTime.now()) == true
+    val isCompletedToday = isLessonCompletedToday(course.dayOfWeek, slot)
     val accent = if (isCompletedToday) Color(0xFFD7CCC8) else courseAccentColor()
     val cardColor = if (isCompletedToday) Color.White.copy(alpha = 0.48f) else Color.White.copy(alpha = 0.82f)
     val timeColor = if (isCompletedToday) Color(0xFFB8AFAE) else Color(0xFF8E7975)
@@ -624,8 +620,12 @@ private fun EmptyScheduleCard() {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(Icons.Filled.Schedule, null, tint = Color(0xFFE26786), modifier = Modifier.size(30.dp))
-        Text("今天没有排课哦", style = MaterialTheme.typography.titleMedium, color = Color(0xFF202023), fontWeight = FontWeight.Black)
-        Text("放松一下吧", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
+        Text(
+            "今天没有课程安排，好好休息吧~",
+            style = MaterialTheme.typography.titleMedium,
+            color = Color(0xFF202023),
+            fontWeight = FontWeight.Black
+        )
     }
 }
 
@@ -692,7 +692,7 @@ private fun ScheduleTablePeriodRow(
             ScheduleTableCourseCell(
                 course = course,
                 isToday = day == LocalDate.now().dayOfWeek,
-                isCompletedToday = day == LocalDate.now().dayOfWeek && slot.endTime.isBefore(LocalTime.now()),
+                isCompletedToday = isLessonCompletedToday(day, slot),
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1189,7 +1189,7 @@ private fun SettingsPage(
             soundReminderEnabled == lastSavedSoundReminderEnabled &&
             soundReminderToneId == lastSavedSoundReminderToneId
         ) return@LaunchedEffect
-        val minutes = reminderMinutesText.toIntOrNull()
+        val minutes = reminderMinutesText.toIntOrNull()?.coerceIn(0, 59)
         if (minutes == null) {
             onErrorMessage("请输入有效的分钟数。")
             return@LaunchedEffect
@@ -1225,15 +1225,14 @@ private fun SettingsPage(
             lastSavedVibrationReminderEnabled = vibrationReminderEnabled
             lastSavedSoundReminderEnabled = soundReminderEnabled
             lastSavedSoundReminderToneId = soundReminderToneId
-            lastSavedReminderMinutesText = reminderMinutesText
+            lastSavedReminderMinutesText = minutes.toString()
         }
     }
 
     LaunchedEffect(reminderMinutesText) {
         if (reminderMinutesText == lastSavedReminderMinutesText) return@LaunchedEffect
-        delay(500)
         if (reminderMinutesText != lastSavedReminderMinutesText) {
-            val minutes = reminderMinutesText.toIntOrNull()
+            val minutes = reminderMinutesText.toIntOrNull()?.coerceIn(0, 59)
             if (minutes == null) {
                 onErrorMessage("请输入有效的分钟数。")
                 return@LaunchedEffect
@@ -1269,7 +1268,7 @@ private fun SettingsPage(
                 lastSavedVibrationReminderEnabled = vibrationReminderEnabled
                 lastSavedSoundReminderEnabled = soundReminderEnabled
                 lastSavedSoundReminderToneId = soundReminderToneId
-                lastSavedReminderMinutesText = reminderMinutesText
+                lastSavedReminderMinutesText = minutes.toString()
             }
         }
     }
@@ -1446,9 +1445,9 @@ private fun SettingsPage(
                         enabled = notificationControlsEnabled,
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                ReminderMinuteField(
+                                ReminderMinuteDropdown(
                                     value = reminderMinutesText,
-                                    onValueChange = { onReminderMinutesTextChange(it.filter(Char::isDigit)) },
+                                    onValueChange = onReminderMinutesTextChange,
                                     enabled = notificationControlsEnabled
                                 )
                                 Spacer(Modifier.width(8.dp))
@@ -2585,34 +2584,55 @@ private data class StatusBadgeStyle(
 )
 
 @Composable
-private fun ReminderMinuteField(
+private fun ReminderMinuteDropdown(
     value: String,
     onValueChange: (String) -> Unit,
     enabled: Boolean = true
 ) {
-    Surface(
-        modifier = Modifier
-            .width(58.dp)
-            .height(32.dp),
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFFFFF3F7)
-    ) {
-        Box(
-            modifier = Modifier.padding(horizontal = 8.dp),
-            contentAlignment = Alignment.Center
+    var expanded by remember { mutableStateOf(false) }
+    val selectedMinutes = value.toIntOrNull()?.coerceIn(0, 59) ?: 0
+    Box {
+        Surface(
+            modifier = Modifier
+                .width(58.dp)
+                .height(32.dp)
+                .clickable(enabled = enabled) { expanded = true },
+            shape = RoundedCornerShape(10.dp),
+            color = Color(0xFFFFF3F7)
         ) {
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                enabled = enabled,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = Color(0xFF303036),
-                    textAlign = TextAlign.Center
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
+            Box(
+                modifier = Modifier.padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = selectedMinutes.toString(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (enabled) Color(0xFF303036) else Color(0xFFB8AFAE),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.height(260.dp)
+        ) {
+            (0..59).forEach { minutes ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = minutes.toString(),
+                            color = if (minutes == selectedMinutes) Color(0xFFE26786) else Color(0xFF303036),
+                            fontWeight = if (minutes == selectedMinutes) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    onClick = {
+                        onValueChange(minutes.toString())
+                        expanded = false
+                    }
+                )
+            }
         }
     }
 }
@@ -3387,6 +3407,16 @@ private fun dayShortLabel(day: DayOfWeek): String = when (day) {
     DayOfWeek.FRIDAY -> "周五"
     DayOfWeek.SATURDAY -> "周六"
     DayOfWeek.SUNDAY -> "周日"
+}
+
+private fun isLessonCompletedToday(
+    day: DayOfWeek,
+    slot: LessonTimeSlot?,
+    now: LocalDateTime = LocalDateTime.now()
+): Boolean {
+    if (slot == null || day != now.toLocalDate().dayOfWeek) return false
+    val effectiveEndAt = LocalDateTime.of(now.toLocalDate(), slot.endTime).plusMinutes(1)
+    return !now.isBefore(effectiveEndAt)
 }
 
 private fun isErrorMessage(message: String): Boolean {

@@ -46,7 +46,8 @@ class CourseScheduleCalculatorTest {
     fun `无课表时为 NoCourse 且午夜为唯一边界`() {
         val now = monday.atTime(12, 0)
         val snap = snapshot(emptyList(), now)
-        assertTrue(snap.state is ReminderState.NoCourse)
+        val state = snap.state as ReminderState.NoCourse
+        assertEquals(NoCourseReason.NO_COURSES_TODAY, state.reason)
         assertEquals(monday.plusDays(1).atStartOfDay(), snap.nextTransitionAt)
         assertTrue(snap.upcomingReminders.isEmpty())
         assertNull(snap.dueReminder)
@@ -67,8 +68,8 @@ class CourseScheduleCalculatorTest {
         val now = monday.atTime(8, 20)
         val snap = snapshot(listOf(course()), now)
         val state = snap.state as ReminderState.InClass
-        assertEquals(monday.atTime(8, 45), state.endAt)
-        assertEquals(monday.atTime(8, 45), snap.nextTransitionAt)
+        assertEquals(monday.atTime(8, 46), state.endAt)
+        assertEquals(monday.atTime(8, 46), snap.nextTransitionAt)
     }
 
     @Test
@@ -79,10 +80,23 @@ class CourseScheduleCalculatorTest {
     }
 
     @Test
+    fun `终点时间所在分钟仍算 InClass 下一分钟才结束`() {
+        val duringEndMinute = snapshot(listOf(course()), monday.atTime(8, 45, 30))
+        val state = duringEndMinute.state as ReminderState.InClass
+        assertEquals(monday.atTime(8, 46), state.endAt)
+        assertEquals(monday.atTime(8, 46), duringEndMinute.nextTransitionAt)
+
+        val afterEndMinute = snapshot(listOf(course()), monday.atTime(8, 46))
+        val noCourse = afterEndMinute.state as ReminderState.NoCourse
+        assertEquals(NoCourseReason.COMPLETED_TODAY, noCourse.reason)
+    }
+
+    @Test
     fun `今日课程全部结束后为 NoCourse 而非显示明天的课`() {
         val now = monday.atTime(10, 0)
         val snap = snapshot(listOf(course(), course(day = DayOfWeek.TUESDAY)), now)
-        assertTrue(snap.state is ReminderState.NoCourse)
+        val state = snap.state as ReminderState.NoCourse
+        assertEquals(NoCourseReason.COMPLETED_TODAY, state.reason)
         // 但 upcoming 排的是明天的课。
         assertEquals(monday.plusDays(1).atTime(8, 0), snap.upcomingReminders.first().lessonStart)
     }
@@ -171,7 +185,8 @@ class CourseScheduleCalculatorTest {
     fun `缺少节次作息的课程被忽略`() {
         val now = monday.atTime(6, 0)
         val snap = snapshot(listOf(course(period = 99)), now)
-        assertTrue(snap.state is ReminderState.NoCourse)
+        val state = snap.state as ReminderState.NoCourse
+        assertEquals(NoCourseReason.NO_COURSES_TODAY, state.reason)
         assertTrue(snap.upcomingReminders.isEmpty())
     }
 
@@ -181,7 +196,7 @@ class CourseScheduleCalculatorTest {
     fun `nextTransitionAt 恒在 now 之后`() {
         val times = listOf(
             monday.atTime(0, 0), monday.atTime(7, 50), monday.atTime(8, 0),
-            monday.atTime(8, 45), monday.atTime(23, 59, 59)
+            monday.atTime(8, 45), monday.atTime(8, 46), monday.atTime(23, 59, 59)
         )
         times.forEach { now ->
             val snap = snapshot(listOf(course()), now)
