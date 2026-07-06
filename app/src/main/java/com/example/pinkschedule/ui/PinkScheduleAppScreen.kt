@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
@@ -44,13 +46,13 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TableChart
-import androidx.compose.material.icons.filled.Troubleshoot
 import androidx.compose.material.icons.filled.ViewTimeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -81,11 +83,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -95,7 +99,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.FileProvider
-import com.example.pinkschedule.data.AlarmDiagnostics
+import com.example.pinkschedule.R
 import com.example.pinkschedule.data.ScheduleImageExporter
 import com.example.pinkschedule.model.LessonTimeProfile
 import com.example.pinkschedule.model.CourseItem
@@ -127,6 +131,47 @@ private enum class ScheduleViewMode {
     TIMELINE,
     TABLE
 }
+
+private val AppCardCornerRadius = 16.dp
+private val AppPageSpacing = 18.dp
+private val AppSectionSpacing = 12.dp
+private val AppInputSpacing = 10.dp
+private val AppControlSpacing = 10.dp
+private val AppButtonStackSpacing = 8.dp
+private val AppInputContainerColor = Color(0xFFFFEEF4)
+private val RestScheduleNameInputColor = Color(0xFFF7ECF2)
+private val AppInputPlaceholderColor = Color(0xFFCDBFC6)
+private val AppInputTextColor = Color(0xFF303036)
+private val AppErrorColor = Color(0xFFD33C63)
+
+private fun appCardShape() = RoundedCornerShape(AppCardCornerRadius)
+
+@Composable
+private fun appInputFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = AppInputTextColor,
+    unfocusedTextColor = AppInputTextColor,
+    errorTextColor = AppInputTextColor,
+    focusedBorderColor = Color.Transparent,
+    unfocusedBorderColor = Color.Transparent,
+    errorBorderColor = Color.Transparent,
+    focusedContainerColor = AppInputContainerColor,
+    unfocusedContainerColor = AppInputContainerColor,
+    errorContainerColor = AppInputContainerColor,
+    focusedPlaceholderColor = AppInputPlaceholderColor,
+    unfocusedPlaceholderColor = AppInputPlaceholderColor,
+    errorPlaceholderColor = AppInputPlaceholderColor,
+    focusedLabelColor = Color(0xFFE26786),
+    unfocusedLabelColor = AppInputPlaceholderColor,
+    errorLabelColor = AppErrorColor,
+    cursorColor = Color(0xFFE26786),
+    errorCursorColor = AppErrorColor
+)
+
+@Composable
+private fun appInputButtonColors() = ButtonDefaults.outlinedButtonColors(
+    containerColor = AppInputContainerColor,
+    contentColor = AppInputTextColor
+)
 
 @Composable
 fun PinkScheduleAppScreen(
@@ -199,52 +244,13 @@ fun PinkScheduleAppScreen(
             else -> true
         }
         Column(modifier = Modifier.fillMaxSize()) {
-            Column(
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .then(if (bottomBarVisible) Modifier else Modifier.navigationBarsPadding())
-                    .verticalScroll(scrollState)
-                    .padding(horizontal = 22.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
-                when (selectedPage) {
-                    AppPage.SCHEDULE -> SchedulePage(
-                        schedule = uiState.schedule,
-                        lessonTimes = uiState.lessonTimes,
-                        selectedDay = selectedDay,
-                        viewMode = scheduleViewMode,
-                        onSelectDay = { selectedDay = it },
-                        onToggleViewMode = {
-                            scheduleViewMode = if (scheduleViewMode == ScheduleViewMode.TIMELINE) {
-                                ScheduleViewMode.TABLE
-                            } else {
-                                ScheduleViewMode.TIMELINE
-                            }
-                        }
-                    )
-                    AppPage.COURSES -> CourseManagementPage(
-                        schedule = uiState.schedule,
-                        lessonTimes = uiState.lessonTimes,
-                        selectedDay = managementDay,
-                        onSelectDay = { managementDay = it },
-                        onAddCourse = {
-                            if (uiState.lessonTimeProfiles.isEmpty() || uiState.lessonTimes.isEmpty()) {
-                                errorDialogMessage = "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
-                            } else {
-                                addingCourseDay = DayOfWeek.of(managementDay)
-                                addingCourse = true
-                            }
-                        },
-                        onEditCourse = {
-                            if (uiState.lessonTimeProfiles.isEmpty() || uiState.lessonTimes.isEmpty()) {
-                                errorDialogMessage = "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
-                            } else {
-                                editingCourse = it
-                            }
-                        },
-                        onDeleteCourse = viewModel::deleteCourse
-                    )
-                    AppPage.SETTINGS -> SettingsPage(
+                if (selectedPage == AppPage.SETTINGS) {
+                    SettingsPage(
                         lessonTimes = uiState.lessonTimes,
                         notificationsEnabled = settingsNotificationsEnabled,
                         alarmModeEnabled = settingsAlarmModeEnabled,
@@ -294,11 +300,62 @@ fun PinkScheduleAppScreen(
                         },
                         onErrorMessage = { errorDialogMessage = it },
                         onRefreshPermission = viewModel::refreshExactAlarmPermission,
-                        onTopLevelChange = { settingsAtTopLevel = it }
+                        onTopLevelChange = { settingsAtTopLevel = it },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 22.dp, vertical = 18.dp)
                     )
-                }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(horizontal = 22.dp, vertical = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(AppPageSpacing)
+                    ) {
+                        when (selectedPage) {
+                            AppPage.SCHEDULE -> SchedulePage(
+                                schedule = uiState.schedule,
+                                lessonTimes = uiState.lessonTimes,
+                                selectedDay = selectedDay,
+                                viewMode = scheduleViewMode,
+                                onSelectDay = { selectedDay = it },
+                                onToggleViewMode = {
+                                    scheduleViewMode = if (scheduleViewMode == ScheduleViewMode.TIMELINE) {
+                                        ScheduleViewMode.TABLE
+                                    } else {
+                                        ScheduleViewMode.TIMELINE
+                                    }
+                                }
+                            )
+                            AppPage.COURSES -> CourseManagementPage(
+                                schedule = uiState.schedule,
+                                lessonTimes = uiState.lessonTimes,
+                                selectedDay = managementDay,
+                                onSelectDay = { managementDay = it },
+                                onAddCourse = {
+                                    if (uiState.lessonTimeProfiles.isEmpty() || uiState.lessonTimes.isEmpty()) {
+                                        errorDialogMessage = "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
+                                    } else {
+                                        addingCourseDay = DayOfWeek.of(managementDay)
+                                        addingCourse = true
+                                    }
+                                },
+                                onEditCourse = {
+                                    if (uiState.lessonTimeProfiles.isEmpty() || uiState.lessonTimes.isEmpty()) {
+                                        errorDialogMessage = "请先在设置中新增并设置一个作息表，再新增或编辑课程。"
+                                    } else {
+                                        editingCourse = it
+                                    }
+                                },
+                                onDeleteCourse = viewModel::deleteCourse
+                            )
+                            AppPage.SETTINGS -> Unit
+                        }
 
-                Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(4.dp))
+                    }
+                }
             }
             if (bottomBarVisible) {
                 AppBottomBar(selected = selectedPage, onSelect = { selectedPage = it })
@@ -396,7 +453,7 @@ private fun SchedulePage(
     val courseDays = remember(schedule.items) { schedule.items.map { it.dayOfWeek.value }.toSet() }
     val filteredCourses = schedule.items.filter { it.dayOfWeek.value == selectedDay }.sortedBy { it.period }
 
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppPageSpacing)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -446,7 +503,7 @@ private fun SchedulePage(
             )
             CourseStatsRow(count = filteredCourses.size)
             if (filteredCourses.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing)) {
                     filteredCourses.forEachIndexed { index, course ->
                         CourseTimelineItem(
                             course = course,
@@ -476,7 +533,7 @@ private fun WeekdayStrip(
     onSelectDay: (Int) -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(22.dp),
+        shape = appCardShape(),
         color = Color.White.copy(alpha = 0.78f),
         shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth()
@@ -495,7 +552,7 @@ private fun WeekdayStrip(
                 }
                 val courseDotColor = if (hasCourse && !selected) themeColor else Color.Transparent
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = appCardShape(),
                     color = if (selected) themeColor else Color.Transparent,
                     shadowElevation = 0.dp,
                     modifier = Modifier
@@ -587,7 +644,7 @@ private fun CourseTimelineItem(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(22.dp))
+                .clip(appCardShape())
                 .background(cardColor)
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -615,16 +672,26 @@ private fun EmptyScheduleCard() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(top = 54.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(Icons.Filled.Schedule, null, tint = Color(0xFFE26786), modifier = Modifier.size(30.dp))
+        Image(
+            painter = painterResource(id = R.drawable.img_empty_schedule),
+            contentDescription = null,
+            modifier = Modifier.size(width = 276.dp, height = 184.dp)
+        )
         Text(
-            "今天没有课程安排，好好休息吧~",
+            "你这一天没有课程",
             style = MaterialTheme.typography.titleMedium,
             color = Color(0xFF202023),
             fontWeight = FontWeight.Black
+        )
+        Text(
+            "放松一下吧",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFFB8AEB3),
+            fontWeight = FontWeight.Normal
         )
     }
 }
@@ -640,7 +707,7 @@ private fun ScheduleTableView(
         schedule.items.associateBy { it.dayOfWeek to it.period }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -819,7 +886,7 @@ private fun CourseManagementPage(
     val dayItems = grouped[day].orEmpty().sortedWith(compareBy({ it.period }, { it.className }))
     var pendingDeleteCourse by remember { mutableStateOf<CourseItem?>(null) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing)) {
         Text(
             text = "课程管理",
             style = MaterialTheme.typography.titleLarge,
@@ -847,9 +914,9 @@ private fun CourseManagementPage(
     pendingDeleteCourse?.let { course ->
         AlertDialog(
             onDismissRequest = { pendingDeleteCourse = null },
-            shape = RoundedCornerShape(24.dp),
+            shape = appCardShape(),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("删除课程？", onDismiss = { pendingDeleteCourse = null }) },
+            title = { DialogTitle("删除课程", onDismiss = { pendingDeleteCourse = null }) },
             text = {
                 Text(
                     "确定删除 ${slotLabel(course.period)} · ${course.courseName} · ${course.className.ifBlank { "未填写班级" }} 吗？",
@@ -877,7 +944,7 @@ private fun DayGroupEditorCard(
     onEditCourse: (CourseItem) -> Unit,
     onDeleteCourse: (CourseItem) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AppSectionSpacing)) {
         if (items.isEmpty()) {
             Text(
                 text = "暂无课程",
@@ -912,7 +979,13 @@ private fun EditableCourseRow(
     val accent = courseAccentColor()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-            Box(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(999.dp)).background(accent))
+            Box(
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(12.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(accent)
+            )
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "${slotLabel(item.period)} · ${item.courseName}",
@@ -967,7 +1040,7 @@ private fun CourseMetaChip(
 @Composable
 private fun BannerMessage(message: String) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = appCardShape(),
         color = Color.White.copy(alpha = 0.82f),
         border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
         modifier = Modifier.fillMaxWidth()
@@ -1002,7 +1075,7 @@ private fun AppErrorDialog(
     val title = dialogTitleForMessage(message, isPermissionGuide)
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
+        shape = appCardShape(),
         containerColor = Color(0xFFFFFCFA),
         title = { DialogTitle(title, onDismiss = onDismiss) },
         text = {
@@ -1060,7 +1133,8 @@ private fun SettingsPage(
     onShareScheduleImage: () -> Unit,
     onErrorMessage: (String) -> Unit,
     onRefreshPermission: () -> Unit,
-    onTopLevelChange: (Boolean) -> Unit
+    onTopLevelChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1106,7 +1180,7 @@ private fun SettingsPage(
             "time-current" -> "time"
             "time-edit" -> "time-edit-list"
             "time-edit-list" -> "time"
-            "alarm", "time", "class", "diagnostics" -> null
+            "alarm", "time", "class" -> null
             else -> null
         }
         if (activeSettingsPanel != "permission") {
@@ -1285,78 +1359,119 @@ private fun SettingsPage(
         }
     }
 
+    val title = when (activeSettingsPanel) {
+        "permission" -> "系统权限"
+        "alarm" -> "通知"
+        "time" -> "作息时间"
+        "class" -> "班级"
+        "time-view-list" -> "查看作息表"
+        "time-view" -> lessonTimeProfiles.firstOrNull { it.id == selectedLessonTimeProfileId }?.name ?: "作息时间"
+        "time-current" -> "设置当前作息表"
+        "time-edit-list" -> "编辑作息表"
+        "time-edit" -> if (draftLessonTimeProfile?.id == selectedLessonTimeProfileId) "新增作息表" else "编辑作息表"
+        else -> "设置"
+    }
+    if (activeSettingsPanel == "time-edit") {
+        val editingProfiles = draftLessonTimeProfile?.let { lessonTimeProfiles + it } ?: lessonTimeProfiles
+        val isNewProfile = draftLessonTimeProfile?.id == selectedLessonTimeProfileId
+        LessonTimeEditPage(
+            profiles = editingProfiles,
+            selectedProfileId = selectedLessonTimeProfileId,
+            isNewProfile = isNewProfile,
+            lessonTimes = lessonTimes,
+            coursePeriods = coursePeriods,
+            onRenameProfile = onRenameLessonTimeProfile,
+            onDraftProfileChange = { updatedDraft ->
+                draftLessonTimeProfile = updatedDraft
+            },
+            onSaveNewProfile = { name, slots ->
+                val createdId = onAddLessonTimeProfile(name, slots)
+                if (createdId != null) {
+                    draftLessonTimeProfile = null
+                    selectedLessonTimeProfileId = createdId
+                }
+                createdId
+            },
+            onUpdateLessonTime = { period, start, end ->
+                onUpdateLessonTimeForProfile(selectedLessonTimeProfileId, period, start, end)
+            },
+            onDeleteLessonTime = { period ->
+                onDeleteLessonTimeFromProfile(selectedLessonTimeProfileId, period)
+            },
+            onSaveSucceeded = { goBack() },
+            header = {
+                SettingsTitle(
+                    title = title,
+                    showBack = true,
+                    onBack = { goBack() }
+                )
+            },
+            modifier = modifier,
+            context = context
+        )
+        return
+    }
+
     Column(
-        verticalArrangement = Arrangement.spacedBy(if (activeSettingsPanel == null) 24.dp else 16.dp),
-        modifier = Modifier.fillMaxWidth()
+        verticalArrangement = Arrangement.spacedBy(if (activeSettingsPanel == null) AppPageSpacing else AppSectionSpacing),
+        modifier = modifier.verticalScroll(rememberScrollState())
     ) {
         SettingsTitle(
-            title = when (activeSettingsPanel) {
-                "permission" -> "系统权限"
-                "diagnostics" -> "闹钟诊断"
-                "alarm" -> "通知"
-                "time" -> "作息时间"
-                "class" -> "班级"
-                "time-view-list" -> "查看作息表"
-                "time-view" -> lessonTimeProfiles.firstOrNull { it.id == selectedLessonTimeProfileId }?.name ?: "作息时间"
-                "time-current" -> "设置当前作息表"
-                "time-edit-list" -> "编辑作息表"
-                "time-edit" -> if (draftLessonTimeProfile?.id == selectedLessonTimeProfileId) "新增作息表" else "编辑作息时间"
-                else -> "设置"
-            },
+            title = title,
             showBack = activeSettingsPanel != null,
             onBack = { goBack() }
         )
-
-        when (activeSettingsPanel) {
-            null -> {
-                SettingsListGroup {
-                    SettingsListRow(
-                        icon = Icons.Filled.Security,
-                        title = "系统权限",
-                        onClick = {
-                            refreshManualPermissionState()
-                            permissionBackTarget = null
-                            permissionGuideReason = null
-                            activeSettingsPanel = "permission"
-                        }
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.NotificationsActive,
-                        title = "通知",
-                        onClick = { activeSettingsPanel = "alarm" }
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.Troubleshoot,
-                        title = "闹钟诊断",
-                        onClick = { activeSettingsPanel = "diagnostics" }
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.AccessTime,
-                        title = "作息时间",
-                        onClick = { activeSettingsPanel = "time" }
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.TableChart,
-                        title = "班级",
-                        onClick = { activeSettingsPanel = "class" }
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.FileUpload,
-                        title = "导入数据",
-                        onClick = onImportData
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.FileDownload,
-                        title = "导出数据",
-                        onClick = onExportData
-                    )
-                    SettingsListRow(
-                        icon = Icons.Filled.Share,
-                        title = "分享课程表",
-                        onClick = onShareScheduleImage
-                    )
+        Column(
+            verticalArrangement = Arrangement.spacedBy(if (activeSettingsPanel == null) AppPageSpacing else AppSectionSpacing),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+        ) {
+            when (activeSettingsPanel) {
+                null -> {
+                    SettingsListGroup {
+                        SettingsListRow(
+                            icon = Icons.Filled.Security,
+                            title = "系统权限",
+                            onClick = {
+                                refreshManualPermissionState()
+                                permissionBackTarget = null
+                                permissionGuideReason = null
+                                activeSettingsPanel = "permission"
+                            }
+                        )
+                        SettingsListRow(
+                            icon = Icons.Filled.NotificationsActive,
+                            title = "通知",
+                            onClick = { activeSettingsPanel = "alarm" }
+                        )
+                        SettingsListRow(
+                            icon = Icons.Filled.AccessTime,
+                            title = "作息时间",
+                            onClick = { activeSettingsPanel = "time" }
+                        )
+                        SettingsListRow(
+                            icon = Icons.Filled.Groups,
+                            title = "班级",
+                            onClick = { activeSettingsPanel = "class" }
+                        )
+                        SettingsListRow(
+                            icon = Icons.Filled.FileUpload,
+                            title = "导入数据",
+                            onClick = onImportData
+                        )
+                        SettingsListRow(
+                            icon = Icons.Filled.FileDownload,
+                            title = "导出数据",
+                            onClick = onExportData
+                        )
+                        SettingsListRow(
+                            icon = Icons.Filled.Share,
+                            title = "分享课程表",
+                            onClick = onShareScheduleImage
+                        )
+                    }
                 }
-            }
             "permission" -> {
                 PermissionSettingsPage(
                     exactAlarmPermissionGranted = exactAlarmPermissionGranted,
@@ -1379,9 +1494,6 @@ private fun SettingsPage(
                         batteryOptimizationIgnored = batteryOptimizationIgnored
                     )
                 )
-            }
-            "diagnostics" -> {
-                AlarmDiagnosticsPage()
             }
             "alarm" -> {
                 val notificationControlsEnabled = notificationsEnabled
@@ -1476,8 +1588,7 @@ private fun SettingsPage(
                     presets = classPresets,
                     onAddPreset = onAddClassPreset,
                     onRenamePreset = onRenameClassPreset,
-                    onDeletePreset = onDeleteClassPreset,
-                    onErrorMessage = onErrorMessage
+                    onDeletePreset = onDeleteClassPreset
                 )
             }
             "time-current" -> {
@@ -1516,7 +1627,7 @@ private fun SettingsPage(
                     onAddProfile = {
                         val draft = LessonTimeProfile(
                             id = "draft-${System.currentTimeMillis()}",
-                            name = "作息表 ${lessonTimeProfiles.size + 1}",
+                            name = "",
                             slots = lessonTimes.sortedBy { it.period }
                         )
                         draftLessonTimeProfile = draft
@@ -1526,36 +1637,9 @@ private fun SettingsPage(
                     onDeleteProfiles = onDeleteLessonTimeProfiles
                 )
             }
-            "time-edit" -> {
-                val editingProfiles = draftLessonTimeProfile?.let { lessonTimeProfiles + it } ?: lessonTimeProfiles
-                val isNewProfile = draftLessonTimeProfile?.id == selectedLessonTimeProfileId
-                LessonTimeEditPage(
-                    profiles = editingProfiles,
-                    selectedProfileId = selectedLessonTimeProfileId,
-                    isNewProfile = isNewProfile,
-                    lessonTimes = lessonTimes,
-                    coursePeriods = coursePeriods,
-                    onRenameProfile = onRenameLessonTimeProfile,
-                    onDraftProfileChange = { updatedDraft ->
-                        draftLessonTimeProfile = updatedDraft
-                    },
-                    onSaveNewProfile = { name, slots ->
-                        val createdId = onAddLessonTimeProfile(name, slots)
-                        if (createdId != null) {
-                            draftLessonTimeProfile = null
-                            selectedLessonTimeProfileId = createdId
-                        }
-                        createdId
-                    },
-                    onUpdateLessonTime = { period, start, end ->
-                        onUpdateLessonTimeForProfile(selectedLessonTimeProfileId, period, start, end)
-                    },
-                    onDeleteLessonTime = { period ->
-                        onDeleteLessonTimeFromProfile(selectedLessonTimeProfileId, period)
-                    },
-                    context = context
-                )
-            }
+            "time-edit" -> Unit
+        }
+            Spacer(Modifier.height(4.dp))
         }
     }
 }
@@ -1566,7 +1650,7 @@ private fun RestScheduleSettingsPage(
     onSetCurrentSchedule: () -> Unit,
     onEditSchedules: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
             SettingsListRow(title = "查看作息表", onClick = onViewSchedules)
             SettingsListRow(title = "设置当前作息表", onClick = onSetCurrentSchedule)
@@ -1580,12 +1664,11 @@ private fun ClassPresetSettingsPage(
     presets: List<String>,
     onAddPreset: (String) -> String?,
     onRenamePreset: (String, String) -> String?,
-    onDeletePreset: (String) -> Unit,
-    onErrorMessage: (String) -> Unit
+    onDeletePreset: (String) -> Unit
 ) {
     var editingPreset by remember { mutableStateOf<String?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
             if (presets.isEmpty()) {
                 EmptySettingsState(
@@ -1597,7 +1680,7 @@ private fun ClassPresetSettingsPage(
                     SettingsListRow(
                         title = preset,
                         trailing = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(AppControlSpacing), verticalAlignment = Alignment.CenterVertically) {
                                 TextButton(
                                     onClick = { editingPreset = preset },
                                     colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFE26786)),
@@ -1639,9 +1722,8 @@ private fun ClassPresetSettingsPage(
                 val error = onAddPreset(name)
                 if (error == null) {
                     showAddDialog = false
-                } else {
-                    onErrorMessage(error)
                 }
+                error
             }
         )
     }
@@ -1654,9 +1736,8 @@ private fun ClassPresetSettingsPage(
                 val error = onRenamePreset(preset, name)
                 if (error == null) {
                     editingPreset = null
-                } else {
-                    onErrorMessage(error)
                 }
+                error
             }
         )
     }
@@ -1667,32 +1748,42 @@ private fun ClassPresetDialog(
     title: String,
     initialValue: String,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String) -> String?
 ) {
     var value by remember(initialValue) { mutableStateOf(initialValue) }
+    var errorText by remember(initialValue) { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
+        shape = appCardShape(),
         containerColor = Color(0xFFFFFCFA),
         title = { DialogTitle(title, onDismiss = onDismiss) },
         text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                label = { Text("班级名称") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFFE26786),
-                    unfocusedBorderColor = Color(0xFFF0DDD2),
-                    focusedContainerColor = Color(0xFFFFF7F4),
-                    unfocusedContainerColor = Color(0xFFFFF7F4)
+            Column(verticalArrangement = Arrangement.spacedBy(AppInputSpacing)) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = {
+                        value = it
+                        errorText = null
+                    },
+                    placeholder = { Text("班级名称") },
+                    singleLine = true,
+                    isError = errorText != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = appCardShape(),
+                    colors = appInputFieldColors()
                 )
-            )
+                errorText?.let {
+                    Text(
+                        text = it,
+                        color = Color(0xFFD33C63),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(start = 2.dp)
+                    )
+                }
+            }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(value) }) {
+            TextButton(onClick = { errorText = onSave(value) }) {
                 Text("保存", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
             }
         }
@@ -1737,7 +1828,7 @@ private fun RestScheduleListPage(
     onSelectProfile: (String) -> Unit,
     trailing: (() -> Unit)? = null
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing), modifier = Modifier.fillMaxWidth()) {
         trailing?.let {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1782,7 +1873,8 @@ private fun RestScheduleEditListPage(
     var selectedForDelete by remember(profiles) { mutableStateOf(emptySet<String>()) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val removableSelection = selectedForDelete - activeProfileId
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+    val canDeleteSelection = removableSelection.isNotEmpty()
+    Column(verticalArrangement = Arrangement.spacedBy(AppButtonStackSpacing), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
             if (profiles.isEmpty()) {
                 EmptySettingsState(
@@ -1794,8 +1886,8 @@ private fun RestScheduleEditListPage(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            .padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(AppControlSpacing),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Checkbox(
@@ -1855,12 +1947,20 @@ private fun RestScheduleEditListPage(
                 onClick = {
                     showDeleteConfirm = true
                 },
-                enabled = removableSelection.isNotEmpty(),
+                enabled = canDeleteSelection,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color(0xFFE26786),
+                    disabledContentColor = Color(0xFFC9C1C5)
+                ),
+                border = BorderStroke(1.dp, if (canDeleteSelection) Color(0xFFF0DDD2) else Color(0xFFE8E0E4)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("删除选中作息表", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
+                Text(
+                    "删除选中作息表",
+                    color = if (canDeleteSelection) Color(0xFFE26786) else Color(0xFFC9C1C5),
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
@@ -1868,9 +1968,9 @@ private fun RestScheduleEditListPage(
         val deleteCount = removableSelection.size
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            shape = RoundedCornerShape(24.dp),
+            shape = appCardShape(),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("删除作息表？", onDismiss = { showDeleteConfirm = false }) },
+            title = { DialogTitle("删除作息表", onDismiss = { showDeleteConfirm = false }) },
             text = {
                 Text(
                     "确定删除选中的 ${deleteCount} 个作息表吗？此操作无法撤销。",
@@ -1896,7 +1996,7 @@ private fun RestScheduleEditListPage(
 private fun RestScheduleViewPage(
     profile: LessonTimeProfile?
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing), modifier = Modifier.fillMaxWidth()) {
         SettingsListGroup {
             val slots = profile?.slots.orEmpty().sortedBy { it.period }
             if (profile == null) {
@@ -1912,7 +2012,7 @@ private fun RestScheduleViewPage(
             } else {
                 slots.forEach { slot ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -2015,13 +2115,15 @@ private fun LessonTimeEditPage(
     onSaveNewProfile: (String, List<LessonTimeSlot>) -> String?,
     onUpdateLessonTime: (Int, LocalTime, LocalTime) -> Unit,
     onDeleteLessonTime: (Int) -> Unit,
+    onSaveSucceeded: () -> Unit,
+    header: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
     context: Context
 ) {
     val selectedProfile = profiles.firstOrNull { it.id == selectedProfileId } ?: profiles.firstOrNull()
     val editingLessonTimes = selectedProfile?.slots?.sortedBy { it.period } ?: lessonTimes
     var pendingDeletePeriod by remember { mutableStateOf<Int?>(null) }
     var pendingSelfStudyOverwrite by remember { mutableStateOf<Pair<AddLessonTimeType, LessonTimeSlot>?>(null) }
-    var showRenameDialog by remember { mutableStateOf(false) }
     var showAddLessonTimeDialog by remember { mutableStateOf(false) }
     var profileName by remember(selectedProfile?.id, selectedProfile?.name) {
         mutableStateOf(selectedProfile?.name.orEmpty())
@@ -2037,6 +2139,27 @@ private fun LessonTimeEditPage(
                 slots = (slots ?: profile.slots).sortedBy { it.period }
             )
         )
+    }
+
+    fun handleSaveProfile() {
+        val profile = selectedProfile ?: return
+        val trimmedName = profileName.trim()
+        if (trimmedName.isBlank()) {
+            localErrorText = "作息表名称不能为空。"
+            return
+        }
+        if (isNewProfile) {
+            if (onSaveNewProfile(trimmedName, editingLessonTimes) == null) {
+                localErrorText = "保存作息表失败。"
+            } else {
+                localErrorText = null
+                onSaveSucceeded()
+            }
+        } else {
+            onRenameProfile(profile.id, trimmedName)
+            localErrorText = null
+            onSaveSucceeded()
+        }
     }
 
     fun applyAddedLessonTime(slot: LessonTimeSlot) {
@@ -2088,125 +2211,112 @@ private fun LessonTimeEditPage(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-        selectedProfile?.let { profile ->
-            SettingsListGroup {
-                SettingsListRow(
-                    title = profile.name,
-                    trailing = {
-                        Text("修改名称", color = Color(0xFFE26786), style = MaterialTheme.typography.bodyMedium)
-                    },
-                    onClick = {
-                        profileName = profile.name
-                        localErrorText = null
-                        showRenameDialog = true
-                    }
-                )
-                if (isNewProfile) {
-                    Button(
-                        onClick = {
-                            val trimmedName = profile.name.trim()
-                            if (trimmedName.isBlank()) {
-                                localErrorText = "作息表名称不能为空。"
-                            } else if (onSaveNewProfile(trimmedName, editingLessonTimes) == null) {
-                                localErrorText = "保存作息表失败。"
-                            } else {
-                                localErrorText = null
-                            }
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        contentPadding = PaddingValues(vertical = 10.dp)
-                    ) {
-                        Text("保存作息表", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-        localErrorText?.let {
-            Text(
-                text = it,
-                color = Color(0xFFD33C63),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        Text(
-            text = "${editingLessonTimes.size} 节",
-            style = MaterialTheme.typography.titleMedium,
-            color = Color(0xFF202023),
-            fontWeight = FontWeight.Black
-        )
-        SettingsListGroup {
-            editingLessonTimes.forEach { slot ->
-                LessonTimeSlotRow(
-                    slot = slot,
-                    validationErrorText = timeValidationErrors[slot.period],
-                    onUpdateLessonTime = ::handleUpdateLessonTime,
-                    onDeleteLessonTime = { period ->
-                        pendingDeletePeriod = period
-                    },
-                    context = context
-                )
-            }
-            Button(
-                onClick = {
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(AppSectionSpacing),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 92.dp)
+        ) {
+            header()
+            BasicTextField(
+                value = profileName,
+                onValueChange = {
+                    profileName = it
                     localErrorText = null
-                    showAddLessonTimeDialog = true
                 },
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(vertical = 10.dp)
-            ) {
-                Icon(Icons.Filled.AddCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("新增作息时间", fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-    if (showRenameDialog && selectedProfile != null) {
-        AlertDialog(
-            onDismissRequest = { showRenameDialog = false },
-            shape = RoundedCornerShape(24.dp),
-            containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("修改作息表名称", onDismiss = { showRenameDialog = false }) },
-            text = {
-                OutlinedTextField(
-                    value = profileName,
-                    onValueChange = { profileName = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFE26786),
-                        unfocusedBorderColor = Color(0xFFF0DDD2),
-                        focusedContainerColor = Color(0xFFFFF7F4),
-                        unfocusedContainerColor = Color(0xFFFFF7F4)
-                    )
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val trimmedName = profileName.trim()
-                        if (trimmedName.isBlank()) {
-                            localErrorText = "作息表名称不能为空。"
-                        } else {
-                            if (isNewProfile) {
-                                updateDraftProfile(name = trimmedName)
-                            } else {
-                                onRenameProfile(selectedProfile.id, trimmedName)
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth(),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = AppInputTextColor),
+                cursorBrush = SolidColor(Color(0xFFE26786)),
+                decorationBox = { innerTextField ->
+                    Surface(
+                        shape = appCardShape(),
+                        color = RestScheduleNameInputColor,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (profileName.isEmpty()) {
+                                Text(
+                                    text = "名称",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = AppInputPlaceholderColor
+                                )
                             }
-                            showRenameDialog = false
-                            localErrorText = null
+                            innerTextField()
                         }
                     }
-                ) {
-                    Text("保存", color = Color(0xFFE26786), fontWeight = FontWeight.Bold)
+                }
+            )
+            localErrorText?.let {
+                Text(
+                    text = it,
+                    color = Color(0xFFD33C63),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(start = 2.dp)
+                )
+            }
+            SettingsListGroup {
+                editingLessonTimes.forEach { slot ->
+                    LessonTimeSlotRow(
+                        slot = slot,
+                        validationErrorText = timeValidationErrors[slot.period],
+                        onUpdateLessonTime = ::handleUpdateLessonTime,
+                        onDeleteLessonTime = { period ->
+                            pendingDeletePeriod = period
+                        },
+                        context = context
+                    )
                 }
             }
-        )
+        }
+        Surface(
+            color = Color(0xFFFFF3F7),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(top = 12.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(AppControlSpacing),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        localErrorText = null
+                        showAddLessonTimeDialog = true
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                ) {
+                    Icon(Icons.Filled.AddCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("新增作息", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = { handleSaveProfile() },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                ) {
+                    Text("保存作息表", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
     if (showAddLessonTimeDialog) {
         var selectedType by remember(selectedProfile?.id, editingLessonTimes.size, showAddLessonTimeDialog) {
@@ -2239,9 +2349,9 @@ private fun LessonTimeEditPage(
     pendingSelfStudyOverwrite?.let { (type, slot) ->
         AlertDialog(
             onDismissRequest = { pendingSelfStudyOverwrite = null },
-            shape = RoundedCornerShape(24.dp),
+            shape = appCardShape(),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("覆盖${type.label}？", onDismiss = { pendingSelfStudyOverwrite = null }) },
+            title = { DialogTitle("覆盖${type.label}", onDismiss = { pendingSelfStudyOverwrite = null }) },
             text = {
                 Text(
                     "当前作息表中已经有${type.label}。是否用新的时间覆盖原${type.label}？",
@@ -2263,9 +2373,9 @@ private fun LessonTimeEditPage(
     pendingDeletePeriod?.let { period ->
         AlertDialog(
             onDismissRequest = { pendingDeletePeriod = null },
-            shape = RoundedCornerShape(24.dp),
+            shape = appCardShape(),
             containerColor = Color(0xFFFFFCFA),
-            title = { DialogTitle("删除作息时间？", onDismiss = { pendingDeletePeriod = null }) },
+            title = { DialogTitle("删除作息时间", onDismiss = { pendingDeletePeriod = null }) },
             text = {
                 Text(
                     if (!isNewProfile && period in coursePeriods) {
@@ -2304,7 +2414,7 @@ private fun PermissionSettingsPage(
     onBackToAlarmSettings: () -> Unit,
     guideText: String
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppSectionSpacing), modifier = Modifier.fillMaxWidth()) {
         Text(
             text = guideText,
             style = MaterialTheme.typography.bodyMedium,
@@ -2349,7 +2459,7 @@ private fun PermissionSettingsPage(
         }
         OutlinedButton(
             onClick = onRefresh,
-            shape = RoundedCornerShape(18.dp),
+            shape = appCardShape(),
             border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -2357,119 +2467,11 @@ private fun PermissionSettingsPage(
         }
         Button(
             onClick = onBackToAlarmSettings,
-            shape = RoundedCornerShape(18.dp),
+            shape = appCardShape(),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE26786), contentColor = Color.White),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("返回通知", fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun AlarmDiagnosticsPage() {
-    val context = LocalContext.current
-    var report by remember { mutableStateOf(AlarmDiagnostics.loadReport(context)) }
-
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "展示实际排出的闹钟与最近触发记录。若列表为空说明没排上（排程问题）；" +
-                "若已排出但到点没响，多为系统省电冻结（请检查系统权限里的自启动与省电设置）。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF6F6468)
-        )
-        SettingsListGroup {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "待触发闹钟（${report.scheduled.size}）",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color(0xFF303036)
-                )
-                val scheduledAt = report.scheduledAt
-                if (scheduledAt != null) {
-                    Text(
-                        text = "排程于 ${AlarmDiagnostics.formatTime(scheduledAt)} · 原因：${report.scheduleReason ?: "未知"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF8F878C)
-                    )
-                }
-                if (report.scheduled.isEmpty()) {
-                    Text("暂无待触发闹钟。", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
-                } else {
-                    report.scheduled.forEach { entry ->
-                        Text(
-                            text = "${AlarmDiagnostics.formatTime(entry.triggerAt)} · ${entry.className} · ${entry.periodLabel}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF5E4148)
-                        )
-                    }
-                }
-            }
-        }
-        SettingsListGroup {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "最近触发记录",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color(0xFF303036)
-                )
-                if (report.fired.isEmpty()) {
-                    Text("暂无触发记录。", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
-                } else {
-                    report.fired.take(10).forEach { event ->
-                        val drift = event.driftMs?.let { "延迟 ${it / 1000.0}s" } ?: "无预定时刻"
-                        Text(
-                            text = "${AlarmDiagnostics.formatTime(event.at)} · ${event.source} · $drift",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF5E4148)
-                        )
-                    }
-                }
-            }
-        }
-        SettingsListGroup {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "心跳记录",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color(0xFF303036)
-                )
-                if (report.heartbeats.isEmpty()) {
-                    Text("暂无心跳记录。", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
-                } else {
-                    report.heartbeats.take(10).forEach { event ->
-                        val target = event.targetAt?.let { " → ${AlarmDiagnostics.formatTime(it)}" }.orEmpty()
-                        Text(
-                            text = "${AlarmDiagnostics.formatTime(event.at)} · ${event.kind}$target",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF5E4148)
-                        )
-                    }
-                }
-            }
-        }
-        OutlinedButton(
-            onClick = { report = AlarmDiagnostics.loadReport(context) },
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("刷新", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -2503,12 +2505,12 @@ private fun PermissionListRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(AppInputSpacing)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(AppControlSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -2668,7 +2670,7 @@ private fun LessonTimeSlotRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 14.dp),
+            .padding(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
@@ -2679,7 +2681,7 @@ private fun LessonTimeSlotRow(
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(AppControlSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TimePickerButton(
@@ -2757,11 +2759,11 @@ private fun SettingsTitle(
 @Composable
 private fun SettingsListGroup(content: @Composable ColumnScope.() -> Unit) {
     Surface(
-        shape = RoundedCornerShape(26.dp),
+        shape = appCardShape(),
         color = Color.White.copy(alpha = 0.94f),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             content()
         }
     }
@@ -2792,8 +2794,8 @@ private fun SettingsListRow(
                 }
             )
             .alpha(if (enabled) 1f else 0.45f)
-            .padding(vertical = if (description == null) 18.dp else 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
+            .padding(vertical = if (description == null) 16.dp else 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         icon?.let {
@@ -2801,7 +2803,7 @@ private fun SettingsListRow(
                 imageVector = it,
                 contentDescription = null,
                 tint = Color(0xFFE26786),
-                modifier = Modifier.size(30.dp)
+                modifier = Modifier.size(28.dp)
             )
         }
         Column(
@@ -2883,7 +2885,7 @@ private fun SoundTonePickerDialog(
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
+        shape = appCardShape(),
         containerColor = Color(0xFFFFFCFA),
         title = { DialogTitle("提示音设置", onDismiss = onDismiss) },
         text = {
@@ -2891,7 +2893,7 @@ private fun SoundTonePickerDialog(
                 ReminderTone.OPTIONS.forEach { tone ->
                     val selected = ReminderTone.resolve(selectedToneId).id == tone.id
                     Surface(
-                        shape = RoundedCornerShape(18.dp),
+                        shape = appCardShape(),
                         color = if (selected) Color(0xFFFFEEF4) else Color.Transparent,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -3078,11 +3080,11 @@ private fun AddLessonTimeDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
+        shape = appCardShape(),
         containerColor = Color(0xFFFFFCFA),
         title = { DialogTitle("新增作息时间", onDismiss = onDismiss) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(AppInputSpacing)) {
                 Text(
                     text = "类型",
                     style = MaterialTheme.typography.titleMedium,
@@ -3091,7 +3093,7 @@ private fun AddLessonTimeDialog(
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(AppControlSpacing)
                 ) {
                     AddLessonTimeType.entries.forEach { option ->
                         val selected = option == type
@@ -3136,7 +3138,7 @@ private fun AddLessonTimeDialog(
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(AppControlSpacing),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TimePickerButton(
@@ -3192,8 +3194,9 @@ private fun TimePickerButton(
         modifier = modifier
             .height(34.dp)
             .defaultMinSize(minWidth = 1.dp, minHeight = 1.dp),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
+        shape = appCardShape(),
+        colors = appInputButtonColors(),
+        border = BorderStroke(1.dp, Color.Transparent),
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
     ) {
         Text(
@@ -3222,7 +3225,7 @@ private fun CourseEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
+        shape = appCardShape(),
         containerColor = Color(0xFFFFFCFA),
         confirmButton = {
             Button(
@@ -3251,34 +3254,24 @@ private fun CourseEditorDialog(
         },
         title = { DialogTitle(if (course == null) "新增课程" else "编辑课程", onDismiss = onDismiss) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(AppInputSpacing)) {
                 OutlinedTextField(
                     value = courseName,
                     onValueChange = { courseName = it },
-                    label = { Text("课程名称") },
+                    placeholder = { Text("课程名称") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFE26786),
-                        unfocusedBorderColor = Color(0xFFF0DDD2),
-                        focusedContainerColor = Color(0xFFFFF7F4),
-                        unfocusedContainerColor = Color(0xFFFFF7F4)
-                    )
+                    shape = appCardShape(),
+                    colors = appInputFieldColors()
                 )
                 OutlinedTextField(
                     value = className,
                     onValueChange = { className = it },
-                    label = { Text("班级") },
+                    placeholder = { Text("班级") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFE26786),
-                        unfocusedBorderColor = Color(0xFFF0DDD2),
-                        focusedContainerColor = Color(0xFFFFF7F4),
-                        unfocusedContainerColor = Color(0xFFFFF7F4)
-                    )
+                    shape = appCardShape(),
+                    colors = appInputFieldColors()
                 )
                 if (classPresets.isNotEmpty()) {
                     ClassPresetDropdown(
@@ -3315,8 +3308,9 @@ private fun PeriodDropdown(
         OutlinedButton(
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, Color(0xFFF0DDD2))
+            shape = appCardShape(),
+            colors = appInputButtonColors(),
+            border = BorderStroke(1.dp, Color.Transparent)
         ) {
             Text(
                 text = options.firstOrNull { it.period == selectedPeriod }?.let { "节次：${slotLabel(it.period)} ${it.displayRange()}" }
@@ -3348,8 +3342,9 @@ private fun ClassPresetDropdown(
         OutlinedButton(
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, Color(0xFFF0DDD2))
+            shape = appCardShape(),
+            colors = appInputButtonColors(),
+            border = BorderStroke(1.dp, Color.Transparent)
         ) {
             Text(
                 text = "选择预设班级",

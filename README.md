@@ -86,9 +86,9 @@ RELEASE_KEY_PASSWORD=your-key-password
 
 ## 当前版本
 
-- 首个 Git 发布版本：`v1.2`
-- Android versionName：`1.2`
-- Android versionCode：`3`
+- 最新 Git 发布版本：`v1.3`
+- Android versionName：`1.3`
+- Android versionCode：`4`
 
 ## 许可证
 
