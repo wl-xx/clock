@@ -1,11 +1,11 @@
 package com.example.pinkschedule
 
 import android.app.Application
-import com.example.pinkschedule.reminder.SystemAlarmScheduler
+import com.example.pinkschedule.reminder.ReminderCoordinator
 
 class PinkScheduleApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        SystemAlarmScheduler.rescheduleStoredCourseAlarms(this)
+        ReminderCoordinator.onScheduleChanged(this, "app_start")
     }
 }

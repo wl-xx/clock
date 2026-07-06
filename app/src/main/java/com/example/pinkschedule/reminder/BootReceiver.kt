@@ -4,23 +4,13 @@ import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.example.pinkschedule.data.ScheduleRepository
 
+/** 开机、应用更新、系统时间/时区变化、精确闹钟权限变化后全量重排。 */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
         if (action !in supportedActions) return
-
-        val items = ScheduleRepository.load(context)
-        val lessonTimes = ScheduleRepository.loadLessonTimes(context)
-        val settings = ScheduleRepository.loadReminderSettings(context)
-
-        SystemAlarmScheduler.syncCourseAlarms(
-            context = context,
-            items = items,
-            lessonTimes = lessonTimes,
-            settings = settings
-        )
+        ReminderCoordinator.onScheduleChanged(context, "system:$action")
     }
 
     companion object {

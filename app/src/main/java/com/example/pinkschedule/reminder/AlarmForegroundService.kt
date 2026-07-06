@@ -5,11 +5,14 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.pm.ServiceInfo
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
-import android.os.PowerManager
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.View
@@ -18,148 +21,67 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.pinkschedule.MainActivity
 import com.example.pinkschedule.R
-import com.example.pinkschedule.data.ScheduleRepository
-import com.example.pinkschedule.model.CourseItem
-import com.example.pinkschedule.model.LessonTimeSlot
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import com.example.pinkschedule.domain.ScheduleSnapshot
+import java.time.Duration
 import java.time.LocalDateTime
-import java.time.temporal.TemporalAdjusters
 
 /**
- * 常驻前台服务：像滴答清单那样，用一个不休眠的前台服务 + 低优先级常驻通知，
- * 自己每隔一小段时间检查“最近的课程提醒时刻是否已到”，到点直接拉起响铃流程。
+ * 常驻前台服务：展示"今日课程"通知（倒计时 / 正在上课 / 暂无课程）。
  *
- * 为什么需要它：ColorOS 等激进省电 ROM 会压制/清理 AlarmManager 闹钟，导致息屏时不触发。
- * 前台服务受系统保护、进程常驻不休眠，是国产 ROM 上息屏提醒最可靠的一层。
- * 它与 setAlarmClock + WorkManager 看门狗叠加，形成多层冗余——任一层失效仍有兜底。
+ * 事件驱动而非轮询：秒级倒计时由系统 Chronometer 控件自走（零耗电、不受进程冻结影响），
+ * 服务只在状态边界被唤醒时重算并刷新通知——边界由 ReminderCoordinator 的心跳闹钟
+ * （提醒点/上课/下课/午夜，最长 6 小时自续）精确驱动，亮屏广播做即时校正。
+ * 无 ticker、无 wakelock：状态是课表的纯函数，START_STICKY 重建后重算即恢复。
  *
- * 注意：本服务始终负责展示今日课程；仅在课程提醒开启时检测并触发到点提醒。
- * 去重复用 ScheduleRepository 的 delivered 签名，避免与 AlarmManager 路径重复响铃。
+ * 它同时是提醒的第三层保活冗余：作为前台服务提高进程存活率，让心跳到点时
+ * ReminderCoordinator.onHeartbeat 的兜底触发（checkAndFire 的替代者）能够执行。
  */
 class AlarmForegroundService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var tickerJob: Job? = null
-    private var wakeLock: PowerManager.WakeLock? = null
     private var lastForegroundNotificationKey: String? = null
+    private var screenOnReceiver: BroadcastReceiver? = null
+    private val handler = Handler(Looper.getMainLooper())
+
+    // 进程内边界回调：进程存活期间在 nextTransitionAt 精确触发一次
+    //（消除心跳闹钟投递抖动带来的负数倒计时窗口，并在前台兜底触发到点提醒）。
+    // 进程被冻结时该回调随之挂起，无副作用——此时通知不可见，心跳闹钟仍是兜底。
+    private val boundaryRunnable = Runnable {
+        runCatching { ReminderCoordinator.onHeartbeat(applicationContext, source = "local") }
+            .onFailure { Log.e(TAG, "local boundary callback failed", it) }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        // 亮屏即校正：用户只有亮屏才看得到通知，此广播只在亮屏时到达，零耗电。
+        screenOnReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent?) {
+                runCatching {
+                    refreshForegroundNotification()
+                    ReminderCoordinator.ensureHeartbeat(context)
+                }.onFailure { Log.e(TAG, "screen-on refresh failed", it) }
+            }
+        }
+        registerReceiver(screenOnReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
+        // 统一恢复协议：无论首次启动、ACTION_REFRESH 还是 STICKY 重建（intent == null），
+        // 都是"重算快照 → 渲染 → 续排心跳"，无状态残留。
         ensureChannel()
         startAsForeground()
-        val remindersEnabled = ScheduleRepository.loadReminderSettings(applicationContext).hasEnabledReminder()
-        if (remindersEnabled && wakeLock?.isHeld != true) {
-            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        } else if (!remindersEnabled && wakeLock?.isHeld == true) {
-            runCatching { wakeLock?.release() }
-            wakeLock = null
-        }
-        if (tickerJob?.isActive != true) {
-            tickerJob = scope.launch { runTicker() }
-        }
-        // START_STICKY：进程被杀后系统尽量重启服务，保持常驻。
+        ReminderCoordinator.ensureHeartbeat(applicationContext)
         return START_STICKY
     }
 
-    private suspend fun runTicker() {
-        while (scope.isActive) {
-            runCatching {
-                refreshForegroundNotification()
-                checkAndFire()
-            }
-                .onFailure { Log.e(TAG, "ticker check failed", it) }
-            delay(CHECK_INTERVAL_MS)
-        }
-    }
-
-    /** 检查最近一节课的提醒时刻是否已到；到点则触发响铃并标记已投递。 */
-    private fun checkAndFire() {
-        val settings = ScheduleRepository.loadReminderSettings(applicationContext)
-        if (!settings.hasEnabledReminder()) {
-            return
-        }
-        val items = ScheduleRepository.load(applicationContext)
-        val lessonTimes = ScheduleRepository.loadLessonTimes(applicationContext)
-        if (items.isEmpty() || lessonTimes.isEmpty()) return
-
-        val now = LocalDateTime.now()
-        val delivered = ScheduleRepository.loadDeliveredAlarmSignatures(applicationContext)
-        val timeIndex = lessonTimes.associateBy { it.period }
-
-        // 找出“已到提醒时刻、但尚未上课、且还没投递过”的最近一节课。
-        data class Due(val item: CourseItem, val slot: LessonTimeSlot, val lessonStart: LocalDateTime)
-
-        val due = items.mapNotNull { item ->
-            val slot = timeIndex[item.period] ?: return@mapNotNull null
-            val lessonStart = thisOrNextOccurrence(now, item, slot)
-            val triggerAt = lessonStart.minusMinutes(settings.reminderMinutesBefore.toLong())
-            // 触发窗口：提醒时刻已到，但课程尚未开始；已在课中则不再补响。
-            if (now.isBefore(triggerAt) || !now.isBefore(lessonStart)) return@mapNotNull null
-            val signature = deliverySignatureOf(item, lessonStart)
-            if (delivered.contains(signature)) return@mapNotNull null
-            Due(item, slot, lessonStart)
-        }.minByOrNull { it.lessonStart } ?: return
-
-        val signature = deliverySignatureOf(due.item, due.lessonStart)
-        Log.i(TAG, "foreground ticker firing class=${due.item.className} lessonStart=${due.lessonStart}")
-
-        val fireIntent = Intent(applicationContext, AlarmRingingService::class.java).apply {
-            putExtra(AlarmReminderReceiver.EXTRA_CLASS_NAME, due.item.className)
-            putExtra(AlarmReminderReceiver.EXTRA_TIME_RANGE, due.slot.displayRange())
-            putExtra(AlarmReminderReceiver.EXTRA_PERIOD, due.item.period)
-            putExtra(AlarmReminderReceiver.EXTRA_SIGNATURE, signature)
-            putExtra(AlarmReminderReceiver.EXTRA_TRIGGER_AT, now.toString())
-            putExtra(AlarmReminderReceiver.EXTRA_LESSON_START, due.lessonStart.toString())
-            putExtra(AlarmReminderReceiver.EXTRA_IS_DEBUG, false)
-            putExtra(AlarmReminderReceiver.EXTRA_SOURCE, "foreground_ticker")
-        }
-        // 标记已投递，避免 AlarmManager 路径或下一轮 tick 重复响铃。
-        ScheduleRepository.markAlarmDelivered(applicationContext, signature)
-        androidx.core.content.ContextCompat.startForegroundService(applicationContext, fireIntent)
-    }
-
-    private fun thisOrNextOccurrence(
-        now: LocalDateTime,
-        item: CourseItem,
-        slot: LessonTimeSlot
-    ): LocalDateTime {
-        val date = now.toLocalDate().with(TemporalAdjusters.nextOrSame(item.dayOfWeek))
-        val candidate = LocalDateTime.of(date, slot.startTime)
-        // 若本周这节课的结束时间已过，看下周同一节。
-        val lessonEnd = LocalDateTime.of(date, slot.endTime)
-        return if (now.isAfter(lessonEnd)) {
-            LocalDateTime.of(date.plusWeeks(1), slot.startTime)
-        } else {
-            candidate
-        }
-    }
-
-    private fun deliverySignatureOf(item: CourseItem, lessonStart: LocalDateTime): String {
-        return listOf(
-            item.dayOfWeek.name,
-            item.period.toString(),
-            lessonStart.toLocalDate().toString(),
-            item.className
-        ).joinToString("|")
-    }
-
     private fun startAsForeground() {
-        val snapshot = todayCourseSnapshot()
+        val domain = domainSnapshotOrNull()
+        val snapshot = notificationSnapshot(domain)
         val notification = buildForegroundNotification(snapshot)
         lastForegroundNotificationKey = snapshot.stableKey
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -168,16 +90,29 @@ class AlarmForegroundService : Service() {
             0
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+        armLocalBoundaryCallback(domain)
     }
 
     private fun refreshForegroundNotification() {
-        val snapshot = todayCourseSnapshot()
+        val domain = domainSnapshotOrNull()
+        val snapshot = notificationSnapshot(domain)
+        armLocalBoundaryCallback(domain)
         if (snapshot.stableKey == lastForegroundNotificationKey) {
             return
         }
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildForegroundNotification(snapshot))
         lastForegroundNotificationKey = snapshot.stableKey
+    }
+
+    private fun armLocalBoundaryCallback(domain: ScheduleSnapshot?) {
+        handler.removeCallbacks(boundaryRunnable)
+        val nextTransitionAt = domain?.nextTransitionAt ?: return
+        val delayMs = Duration.between(LocalDateTime.now(), nextTransitionAt).toMillis()
+        // 太远的边界交给心跳闹钟；已过/过近的至少 500ms 防零延迟自旋。
+        if (delayMs <= MAX_LOCAL_BOUNDARY_MS) {
+            handler.postDelayed(boundaryRunnable, delayMs.coerceAtLeast(500L))
+        }
     }
 
     private fun buildForegroundNotification(
@@ -212,12 +147,19 @@ class AlarmForegroundService : Service() {
         views.setTextViewText(R.id.notification_status, snapshot.title)
         views.setTextViewText(R.id.notification_detail, snapshot.text)
         val countdownTarget = snapshot.countdownTargetEpochMillis
-        if (countdownTarget == null) {
+        val remainingMs = countdownTarget?.let { it - System.currentTimeMillis() } ?: -1L
+        if (countdownTarget == null || remainingMs <= 0L) {
+            // 目标缺失或已到点：绝不渲染可能为负的倒计时。
+            // 到点后的状态切换由 startAt 时刻的心跳闹钟精确驱动。
             views.setViewVisibility(R.id.notification_countdown, View.GONE)
         } else {
-            val base = SystemClock.elapsedRealtime() + (countdownTarget - System.currentTimeMillis())
             views.setViewVisibility(R.id.notification_countdown, View.VISIBLE)
-            views.setChronometer(R.id.notification_countdown, base, null, true)
+            views.setChronometer(
+                R.id.notification_countdown,
+                SystemClock.elapsedRealtime() + remainingMs,
+                null,
+                true
+            )
             views.setChronometerCountDown(R.id.notification_countdown, true)
         }
         return views
@@ -233,21 +175,22 @@ class AlarmForegroundService : Service() {
         }
     }
 
-    private fun todayCourseSnapshot(): TodayCourseSummary.ForegroundNotificationSnapshot {
+    private fun domainSnapshotOrNull(): ScheduleSnapshot? {
         return runCatching {
-            TodayCourseSummary.foregroundNotificationSnapshot(
-                items = ScheduleRepository.load(applicationContext),
-                lessonTimes = ScheduleRepository.loadLessonTimes(applicationContext),
-                now = LocalDateTime.now()
-            )
-        }.getOrDefault(
-            TodayCourseSummary.ForegroundNotificationSnapshot(
+            ReminderCoordinator.computeSnapshot(applicationContext, LocalDateTime.now())
+        }.onFailure { Log.e(TAG, "compute snapshot failed", it) }.getOrNull()
+    }
+
+    private fun notificationSnapshot(
+        domain: ScheduleSnapshot?
+    ): TodayCourseSummary.ForegroundNotificationSnapshot {
+        return domain?.let { runCatching { TodayCourseSummary.foregroundNotificationSnapshot(it) }.getOrNull() }
+            ?: TodayCourseSummary.ForegroundNotificationSnapshot(
                 title = "今日课程",
                 text = "暂无未结束课程",
                 stableKey = "error",
                 countdownTargetEpochMillis = null
             )
-        )
     }
 
     private fun ensureChannel() {
@@ -267,12 +210,9 @@ class AlarmForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        tickerJob?.cancel()
-        scope.cancel()
-        if (wakeLock?.isHeld == true) {
-            runCatching { wakeLock?.release() }
-        }
-        wakeLock = null
+        handler.removeCallbacks(boundaryRunnable)
+        screenOnReceiver?.let { runCatching { unregisterReceiver(it) } }
+        screenOnReceiver = null
         super.onDestroy()
     }
 
@@ -280,13 +220,24 @@ class AlarmForegroundService : Service() {
         private const val TAG = "AlarmForegroundService"
         private const val CHANNEL_ID = "today_course_foreground_v1"
         private const val NOTIFICATION_ID = 2100
-        private const val WAKELOCK_TAG = "PinkSchedule:ForegroundGuardian"
-        private const val CHECK_INTERVAL_MS = 1_000L
+        // 进程内边界回调只处理 6 小时内的边界，更远的交给心跳闹钟链。
+        private const val MAX_LOCAL_BOUNDARY_MS = 6 * 60 * 60 * 1000L
         const val ACTION_STOP = "com.example.pinkschedule.reminder.action.STOP_GUARDIAN"
+        const val ACTION_REFRESH = "com.example.pinkschedule.reminder.action.REFRESH_GUARDIAN"
 
         fun start(context: Context) {
             val intent = Intent(context, AlarmForegroundService::class.java)
             androidx.core.content.ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** 心跳/系统事件到达时刷新通知；服务已死则借此复活。 */
+        fun refresh(context: Context) {
+            val intent = Intent(context, AlarmForegroundService::class.java).apply {
+                action = ACTION_REFRESH
+            }
+            runCatching {
+                androidx.core.content.ContextCompat.startForegroundService(context, intent)
+            }.onFailure { Log.e(TAG, "refresh guardian failed", it) }
         }
 
         fun stop(context: Context) {

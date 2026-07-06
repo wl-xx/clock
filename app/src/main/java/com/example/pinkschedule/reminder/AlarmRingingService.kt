@@ -242,11 +242,7 @@ class AlarmRingingService : Service() {
 
     private fun replenishAlarms(intent: Intent?, isDebug: Boolean) {
         if (isDebug) return
-        val triggerAtRaw = intent?.getStringExtra(AlarmReminderReceiver.EXTRA_TRIGGER_AT)
-        val now = runCatching {
-            triggerAtRaw?.let(LocalDateTime::parse)?.plusSeconds(1)
-        }.getOrNull() ?: LocalDateTime.now()
-        SystemAlarmScheduler.rescheduleStoredCourseAlarms(this, now)
+        ReminderCoordinator.onReminderFired(this, LocalDateTime.now())
     }
 
     private fun markDelivered(signature: String?, isDebug: Boolean) {

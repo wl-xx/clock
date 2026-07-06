@@ -5,11 +5,24 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.example.pinkschedule.data.AlarmDiagnostics
 import com.example.pinkschedule.data.ScheduleRepository
 import java.time.LocalDateTime
 
 class AlarmReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        if (intent?.action == ACTION_STATE_TRANSITION) {
+            // 心跳边界闹钟：不响铃，只重算状态、刷新前台通知、兜底触发、续排下一次心跳。
+            val pendingResult = goAsync()
+            try {
+                ReminderCoordinator.onHeartbeat(context)
+            } catch (t: Throwable) {
+                Log.e(TAG, "heartbeat handling failed", t)
+            } finally {
+                pendingResult.finish()
+            }
+            return
+        }
         if (!shouldDeliver(context, intent)) {
             return
         }
@@ -17,7 +30,7 @@ class AlarmReminderReceiver : BroadcastReceiver() {
         // 前台服务真正启动完成前保持存活——Doze 唤醒窗口很短，否则系统可能在
         // startForegroundService 生效前回收进程，导致息屏时闹钟“没响”。
         WakeLockManager.acquireStartup(context)
-        logTrigger(intent)
+        logTrigger(context, intent)
         val pendingResult = goAsync()
         try {
             val serviceIntent = Intent(context, AlarmRingingService::class.java).apply {
@@ -50,11 +63,13 @@ class AlarmReminderReceiver : BroadcastReceiver() {
             return false
         }
         synchronized(inFlightSignatures) {
-            if (inFlightSignatures.contains(signature)) {
+            val now = System.currentTimeMillis()
+            inFlightSignatures.entries.removeAll { now - it.value > IN_FLIGHT_TTL_MS }
+            if (inFlightSignatures.containsKey(signature)) {
                 Log.i(TAG, "drop duplicate in-flight alarm signature=$signature")
                 return false
             }
-            inFlightSignatures += signature
+            inFlightSignatures[signature] = now
         }
         return true
     }
@@ -66,16 +81,20 @@ class AlarmReminderReceiver : BroadcastReceiver() {
         return !LocalDateTime.now().isBefore(lessonStart)
     }
 
-    private fun logTrigger(intent: Intent?) {
+    private fun logTrigger(context: Context, intent: Intent?) {
         val scheduledAt = intent?.getLongExtra(EXTRA_TRIGGER_EPOCH_MILLIS, 0L) ?: 0L
         val drift = if (scheduledAt > 0L) {
             System.currentTimeMillis() - scheduledAt
         } else {
             null
         }
-        Log.i(
-            TAG,
-            "alarm broadcast action=${intent?.action} source=${intent?.getStringExtra(EXTRA_SOURCE)} driftMs=$drift"
+        val source = intent?.getStringExtra(EXTRA_SOURCE).orEmpty()
+        Log.i(TAG, "alarm broadcast action=${intent?.action} source=$source driftMs=$drift")
+        AlarmDiagnostics.recordFired(
+            context = context,
+            signature = intent?.getStringExtra(EXTRA_SIGNATURE).orEmpty(),
+            source = source,
+            driftMs = drift
         )
     }
 
@@ -96,7 +115,20 @@ class AlarmReminderReceiver : BroadcastReceiver() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_FIRE_ALARM = "com.example.pinkschedule.reminder.action.FIRE_ALARM"
         const val ACTION_FIRE_ALARM_BACKUP = "com.example.pinkschedule.reminder.action.FIRE_ALARM_BACKUP"
+        const val ACTION_STATE_TRANSITION = "com.example.pinkschedule.reminder.action.STATE_TRANSITION"
 
-        private val inFlightSignatures = mutableSetOf<String>()
+        private val inFlightSignatures = mutableMapOf<String, Long>()
+        // 主/备份广播的到达间隔通常在毫秒级；10 分钟足够覆盖并发窗口，
+        // 又不会让同一签名在极端重排场景下被永久判重。
+        private const val IN_FLIGHT_TTL_MS = 10 * 60 * 1000L
+
+        /** 兜底路径触发前查询：该签名是否已由 AlarmManager 广播路径接手。 */
+        fun isInFlight(signature: String): Boolean {
+            synchronized(inFlightSignatures) {
+                val now = System.currentTimeMillis()
+                inFlightSignatures.entries.removeAll { now - it.value > IN_FLIGHT_TTL_MS }
+                return inFlightSignatures.containsKey(signature)
+            }
+        }
     }
 }

@@ -312,6 +312,25 @@ object ScheduleRepository {
             .apply()
     }
 
+    /**
+     * 清理历史 delivered 签名。签名格式为 dayOfWeek|period|lessonDate|className，
+     * lessonDate 早于 today 的签名对应已经过去的课，不可能再被排程命中，直接删除，
+     * 防止集合随时间无限膨胀。解析失败的旧格式条目一并删除。
+     */
+    fun pruneDeliveredAlarmSignatures(context: Context, today: java.time.LocalDate) {
+        val current = loadDeliveredAlarmSignatures(context)
+        if (current.isEmpty()) return
+        val kept = current.filterTo(mutableSetOf()) { signature ->
+            val lessonDate = signature.split("|").getOrNull(2)?.let {
+                runCatching { java.time.LocalDate.parse(it) }.getOrNull()
+            } ?: return@filterTo false
+            !lessonDate.isBefore(today)
+        }
+        if (kept.size != current.size) {
+            saveDeliveredAlarmSignatures(context, kept)
+        }
+    }
+
     /** 自启动/后台冻结等保活项无法通过 API 检测，只在首次开启闹钟时引导一次，避免每次都打扰。 */
     fun hasPromptedAutoStart(context: Context): Boolean {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

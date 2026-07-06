@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.Troubleshoot
 import androidx.compose.material.icons.filled.ViewTimeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -97,6 +98,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.FileProvider
+import com.example.pinkschedule.data.AlarmDiagnostics
 import com.example.pinkschedule.data.ScheduleImageExporter
 import com.example.pinkschedule.model.LessonTimeProfile
 import com.example.pinkschedule.model.CourseItem
@@ -106,6 +108,7 @@ import com.example.pinkschedule.model.ScheduleDefaults
 import com.example.pinkschedule.model.WeeklySchedule
 import com.example.pinkschedule.reminder.AlarmPlaybackManager
 import com.example.pinkschedule.reminder.SystemAlarmScheduler
+import com.example.pinkschedule.reminder.SystemSettingsNavigator
 import com.example.pinkschedule.viewmodel.ScheduleViewModel
 import kotlinx.coroutines.delay
 import java.io.File
@@ -1079,7 +1082,7 @@ private fun SettingsPage(
     var lastSavedReminderMinutesText by remember { mutableStateOf(reminderMinutesText) }
     var showSoundToneDialog by remember { mutableStateOf(false) }
     var batteryOptimizationIgnored by remember {
-        mutableStateOf(SystemAlarmScheduler.isIgnoringBatteryOptimizations(context))
+        mutableStateOf(SystemSettingsNavigator.isIgnoringBatteryOptimizations(context))
     }
     var activeSettingsPanel by rememberSaveable { mutableStateOf<String?>(null) }
     var permissionBackTarget by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1089,7 +1092,7 @@ private fun SettingsPage(
 
     fun refreshManualPermissionState() {
         onRefreshPermission()
-        batteryOptimizationIgnored = SystemAlarmScheduler.isIgnoringBatteryOptimizations(context)
+        batteryOptimizationIgnored = SystemSettingsNavigator.isIgnoringBatteryOptimizations(context)
     }
 
     fun goBack() {
@@ -1103,7 +1106,7 @@ private fun SettingsPage(
             "time-current" -> "time"
             "time-edit" -> "time-edit-list"
             "time-edit-list" -> "time"
-            "alarm", "time", "class" -> null
+            "alarm", "time", "class", "diagnostics" -> null
             else -> null
         }
         if (activeSettingsPanel != "permission") {
@@ -1156,19 +1159,19 @@ private fun SettingsPage(
 
     LaunchedEffect(requestNotificationStyleTick) {
         if (requestNotificationStyleTick > 0) {
-            SystemAlarmScheduler.openAlarmNotificationChannelSettings(context)
+            SystemSettingsNavigator.openAlarmNotificationChannelSettings(context)
         }
     }
 
     LaunchedEffect(requestBatteryOptimizationTick) {
         if (requestBatteryOptimizationTick > 0) {
-            com.example.pinkschedule.reminder.SystemAlarmScheduler.openBatteryOptimizationSettings(context)
+            com.example.pinkschedule.reminder.SystemSettingsNavigator.openBatteryOptimizationSettings(context)
         }
     }
 
     LaunchedEffect(requestAutoStartTick) {
         if (requestAutoStartTick > 0) {
-            com.example.pinkschedule.reminder.SystemAlarmScheduler.openAutoStartSettings(context)
+            com.example.pinkschedule.reminder.SystemSettingsNavigator.openAutoStartSettings(context)
         }
     }
 
@@ -1290,6 +1293,7 @@ private fun SettingsPage(
         SettingsTitle(
             title = when (activeSettingsPanel) {
                 "permission" -> "系统权限"
+                "diagnostics" -> "闹钟诊断"
                 "alarm" -> "通知"
                 "time" -> "作息时间"
                 "class" -> "班级"
@@ -1321,6 +1325,11 @@ private fun SettingsPage(
                         icon = Icons.Filled.NotificationsActive,
                         title = "通知",
                         onClick = { activeSettingsPanel = "alarm" }
+                    )
+                    SettingsListRow(
+                        icon = Icons.Filled.Troubleshoot,
+                        title = "闹钟诊断",
+                        onClick = { activeSettingsPanel = "diagnostics" }
                     )
                     SettingsListRow(
                         icon = Icons.Filled.AccessTime,
@@ -1371,6 +1380,9 @@ private fun SettingsPage(
                         batteryOptimizationIgnored = batteryOptimizationIgnored
                     )
                 )
+            }
+            "diagnostics" -> {
+                AlarmDiagnosticsPage()
             }
             "alarm" -> {
                 val notificationControlsEnabled = notificationsEnabled
@@ -2355,6 +2367,114 @@ private fun PermissionSettingsPage(
     }
 }
 
+@Composable
+private fun AlarmDiagnosticsPage() {
+    val context = LocalContext.current
+    var report by remember { mutableStateOf(AlarmDiagnostics.loadReport(context)) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "展示实际排出的闹钟与最近触发记录。若列表为空说明没排上（排程问题）；" +
+                "若已排出但到点没响，多为系统省电冻结（请检查系统权限里的自启动与省电设置）。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFF6F6468)
+        )
+        SettingsListGroup {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "待触发闹钟（${report.scheduled.size}）",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF303036)
+                )
+                val scheduledAt = report.scheduledAt
+                if (scheduledAt != null) {
+                    Text(
+                        text = "排程于 ${AlarmDiagnostics.formatTime(scheduledAt)} · 原因：${report.scheduleReason ?: "未知"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF8F878C)
+                    )
+                }
+                if (report.scheduled.isEmpty()) {
+                    Text("暂无待触发闹钟。", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
+                } else {
+                    report.scheduled.forEach { entry ->
+                        Text(
+                            text = "${AlarmDiagnostics.formatTime(entry.triggerAt)} · ${entry.className} · ${entry.periodLabel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF5E4148)
+                        )
+                    }
+                }
+            }
+        }
+        SettingsListGroup {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "最近触发记录",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF303036)
+                )
+                if (report.fired.isEmpty()) {
+                    Text("暂无触发记录。", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
+                } else {
+                    report.fired.take(10).forEach { event ->
+                        val drift = event.driftMs?.let { "延迟 ${it / 1000.0}s" } ?: "无预定时刻"
+                        Text(
+                            text = "${AlarmDiagnostics.formatTime(event.at)} · ${event.source} · $drift",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF5E4148)
+                        )
+                    }
+                }
+            }
+        }
+        SettingsListGroup {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "心跳记录",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF303036)
+                )
+                if (report.heartbeats.isEmpty()) {
+                    Text("暂无心跳记录。", style = MaterialTheme.typography.bodySmall, color = Color(0xFF8F878C))
+                } else {
+                    report.heartbeats.take(10).forEach { event ->
+                        val target = event.targetAt?.let { " → ${AlarmDiagnostics.formatTime(it)}" }.orEmpty()
+                        Text(
+                            text = "${AlarmDiagnostics.formatTime(event.at)} · ${event.kind}$target",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF5E4148)
+                        )
+                    }
+                }
+            }
+        }
+        OutlinedButton(
+            onClick = { report = AlarmDiagnostics.loadReport(context) },
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.dp, Color(0xFFF0DDD2)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("刷新", color = Color(0xFFE26786), fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
 private fun permissionGuideText(
     reason: String?,
     exactAlarmPermissionGranted: Boolean,
@@ -3232,7 +3352,7 @@ private fun ClassPresetDropdown(
 }
 
 private fun openExactAlarmPermission(context: Context) {
-    SystemAlarmScheduler.openExactAlarmPermissionSettings(context)
+    SystemSettingsNavigator.openExactAlarmPermissionSettings(context)
 }
 
 private fun requestNotificationPermission(
@@ -3240,11 +3360,11 @@ private fun requestNotificationPermission(
     launcher: androidx.activity.result.ActivityResultLauncher<String>
 ) {
     if (SystemAlarmScheduler.canPostNotifications(context)) {
-        SystemAlarmScheduler.openAppNotificationSettings(context)
+        SystemSettingsNavigator.openAppNotificationSettings(context)
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
-        SystemAlarmScheduler.openAppNotificationSettings(context)
+        SystemSettingsNavigator.openAppNotificationSettings(context)
     }
 }
 

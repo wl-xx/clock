@@ -33,7 +33,7 @@ class AlarmWatchdogWorker(
                 Log.i(TAG, "watchdog: course reminders disabled, skip")
                 return@runCatching Result.success()
             }
-            val result = SystemAlarmScheduler.rescheduleStoredCourseAlarms(applicationContext)
+            val result = ReminderCoordinator.onScheduleChanged(applicationContext, "watchdog")
             Log.i(TAG, "watchdog reschedule: ${result.message}")
             Result.success()
         }.getOrElse {

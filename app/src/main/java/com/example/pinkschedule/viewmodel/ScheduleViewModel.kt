@@ -11,7 +11,9 @@ import com.example.pinkschedule.model.LessonTimeSlot
 import com.example.pinkschedule.model.ReminderSettings
 import com.example.pinkschedule.model.ScheduleDefaults
 import com.example.pinkschedule.model.WeeklySchedule
+import com.example.pinkschedule.reminder.ReminderCoordinator
 import com.example.pinkschedule.reminder.SystemAlarmScheduler
+import com.example.pinkschedule.reminder.SystemSettingsNavigator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,8 +97,6 @@ class ScheduleViewModel(
         val schedule = _uiState.value.schedule.copy(items = sorted)
         val lessonTimes = mergedLessonTimesFor(sorted)
         return runCatching {
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
             persistSchedule(
                 schedule = schedule,
                 lessonTimes = lessonTimes,
@@ -243,7 +243,7 @@ class ScheduleViewModel(
         // 电池优化白名单是 Doze 深度休眠下闹钟能否准时触发的决定性因素。
         // 与其它权限不同，它不阻止闹钟排程，但未加入白名单时必须主动弹系统申请框，
         // 否则息屏放置时系统会推迟 setAlarmClock 的投递（表现为“亮屏才响”）。
-        val ignoringBatteryOptimizations = SystemAlarmScheduler.isIgnoringBatteryOptimizations(context)
+        val ignoringBatteryOptimizations = SystemSettingsNavigator.isIgnoringBatteryOptimizations(context)
         val settings = ReminderSettings(
             notificationsEnabled = notificationsEnabled,
             alarmModeEnabled = alarmModeEnabled,
@@ -253,7 +253,6 @@ class ScheduleViewModel(
             reminderMinutesBefore = minutesBefore
         ).normalized()
         return runCatching {
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
             ScheduleRepository.saveReminderSettings(context, settings)
             val alarmMessage = if (settings.hasEnabledReminder()) {
                 refreshScheduledAlarms(
@@ -262,6 +261,12 @@ class ScheduleViewModel(
                     settings = settings
                 ).message
             } else {
+                // 关闭提醒也要走门面：取消课程闹钟与心跳、停止前台服务。
+                refreshScheduledAlarms(
+                    schedule = _uiState.value.schedule,
+                    lessonTimes = _uiState.value.lessonTimes,
+                    settings = settings
+                )
                 "已关闭课程提醒。"
             }
             val needBatteryPrompt = settings.hasEnabledReminder() && !ignoringBatteryOptimizations
@@ -339,8 +344,6 @@ class ScheduleViewModel(
             ScheduleRepository.saveLessonTimeProfiles(context, payload.profiles, payload.activeProfileId)
             ScheduleRepository.save(context, schedule)
             ScheduleRepository.saveClassPresets(context, payload.classPresets)
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
             val importMessage = "数据已导入。"
             val alarmMessage = if (reminderSettings.hasEnabledReminder()) {
                 refreshScheduledAlarms(schedule, activeSlots, reminderSettings).message
@@ -373,9 +376,15 @@ class ScheduleViewModel(
         val target = _uiState.value.lessonTimeProfiles.firstOrNull { it.id == profileId } ?: return
         runCatching {
             ScheduleRepository.setActiveLessonTimeProfileId(context, target.id)
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
             val merged = mergedLessonTimesFor(_uiState.value.schedule.items, target.slots)
+            // 先落盘再排程：Coordinator 从仓库读取数据，必须保证读到切换后的作息。
+            ScheduleRepository.saveLessonTimeProfiles(
+                context,
+                _uiState.value.lessonTimeProfiles.map {
+                    if (it.id == target.id) it.copy(slots = merged) else it
+                },
+                target.id
+            )
             syncLocalState(
                 schedule = _uiState.value.schedule,
                 lessonTimes = merged,
@@ -392,7 +401,6 @@ class ScheduleViewModel(
                     "已切换到${target.name}。"
                 }
             )
-            ScheduleRepository.saveLessonTimeProfiles(context, _uiState.value.lessonTimeProfiles, target.id)
         }.onFailure {
             _uiState.value = _uiState.value.copy(message = "切换作息表失败：${it.message ?: "未知错误"}")
         }
@@ -454,8 +462,6 @@ class ScheduleViewModel(
             activeLessonTimeProfileId = activeId,
             lessonTimes = activeSlots,
             message = if (reminderSettings.hasEnabledReminder()) {
-                ScheduleRepository.clearDeliveredAlarmSignatures(context)
-                ScheduleRepository.saveLastAlarmSignature(context, null)
                 refreshScheduledAlarms(_uiState.value.schedule, activeSlots, reminderSettings).message
             } else {
                 "已删除作息表。"
@@ -640,14 +646,12 @@ class ScheduleViewModel(
     private fun refreshScheduledAlarms(
         schedule: WeeklySchedule,
         lessonTimes: List<LessonTimeSlot>,
-        settings: ReminderSettings
-    ): SystemAlarmScheduler.AlarmResult {
-        return SystemAlarmScheduler.syncCourseAlarms(
-            context = context,
-            items = schedule.items,
-            lessonTimes = lessonTimes,
-            settings = settings
-        )
+        settings: ReminderSettings,
+        reason: String = "viewmodel"
+    ): ReminderCoordinator.SyncResult {
+        // 调用前所有相关数据都已写入 ScheduleRepository；Coordinator 从仓库读取，
+        // 保证与其它入口（开机、看门狗、心跳）使用同一份数据源。
+        return ReminderCoordinator.onScheduleChanged(context, reason)
     }
 
     private fun saveLessonTimes(
@@ -658,8 +662,6 @@ class ScheduleViewModel(
         runCatching {
             ScheduleRepository.saveLessonTimes(context, updated)
             ScheduleRepository.save(context, schedule)
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
             val reminderSettings = _uiState.value.reminderSettings
             syncLocalState(
                 schedule = schedule,
@@ -701,8 +703,6 @@ class ScheduleViewModel(
             }
             ScheduleRepository.saveLessonTimeProfiles(context, updatedProfiles, activeId)
             ScheduleRepository.save(context, schedule)
-            ScheduleRepository.clearDeliveredAlarmSignatures(context)
-            ScheduleRepository.saveLastAlarmSignature(context, null)
             val activeSlots = updatedProfiles.firstOrNull { it.id == activeId }?.slots ?: _uiState.value.lessonTimes
             val reminderSettings = _uiState.value.reminderSettings
             syncLocalState(
