@@ -24,6 +24,7 @@ object ScheduleRepository {
     private const val KEY_VIBRATION_REMINDER_ENABLED = "vibration_reminder_enabled"
     private const val KEY_SOUND_REMINDER_ENABLED = "sound_reminder_enabled"
     private const val KEY_SOUND_REMINDER_TONE_ID = "sound_reminder_tone_id"
+    private const val KEY_REMINDER_VOLUME_PERCENT = "reminder_volume_percent"
     private const val KEY_REMINDER_MINUTES = "reminder_minutes"
     private const val KEY_LAST_ALARM_SIGNATURE = "last_alarm_signature"
     private const val KEY_DELIVERED_ALARM_SIGNATURES = "delivered_alarm_signatures"
@@ -253,6 +254,7 @@ object ScheduleRepository {
             .putBoolean(KEY_VIBRATION_REMINDER_ENABLED, normalized.vibrationReminderEnabled)
             .putBoolean(KEY_SOUND_REMINDER_ENABLED, normalized.soundReminderEnabled)
             .putString(KEY_SOUND_REMINDER_TONE_ID, normalized.soundReminderToneId)
+            .putInt(KEY_REMINDER_VOLUME_PERCENT, normalized.reminderVolumePercent)
             .putInt(KEY_REMINDER_MINUTES, normalized.reminderMinutesBefore)
             .apply()
     }
@@ -265,6 +267,10 @@ object ScheduleRepository {
             vibrationReminderEnabled = prefs.getBoolean(KEY_VIBRATION_REMINDER_ENABLED, false),
             soundReminderEnabled = prefs.getBoolean(KEY_SOUND_REMINDER_ENABLED, false),
             soundReminderToneId = prefs.getString(KEY_SOUND_REMINDER_TONE_ID, null).orEmpty(),
+            reminderVolumePercent = prefs.getInt(
+                KEY_REMINDER_VOLUME_PERCENT,
+                ReminderSettings.DEFAULT_VOLUME_PERCENT
+            ),
             reminderMinutesBefore = prefs.getInt(
                 KEY_REMINDER_MINUTES,
                 ScheduleDefaults.DEFAULT_REMINDER_MINUTES

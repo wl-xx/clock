@@ -12,6 +12,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import com.example.pinkschedule.R
+import com.example.pinkschedule.model.ReminderSettings
 import com.example.pinkschedule.model.ReminderTone
 
 object AlarmPlaybackManager {
@@ -22,8 +23,13 @@ object AlarmPlaybackManager {
     private var vibrator: Vibrator? = null
     private val promptTonePlayers = mutableSetOf<MediaPlayer>()
 
-    fun start(context: Context, vibrate: Boolean) {
+    fun start(
+        context: Context,
+        vibrate: Boolean,
+        volumePercent: Int = ReminderSettings.DEFAULT_VOLUME_PERCENT
+    ) {
         stop()
+        val audioVolume = normalizedVolume(volumePercent)
         val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -39,6 +45,7 @@ object AlarmPlaybackManager {
                     setWakeMode(context.applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
                     setDataSource(context.applicationContext, uri)
                     isLooping = true
+                    setVolume(audioVolume, audioVolume)
                     setOnErrorListener { player, what, extra ->
                         Log.e(TAG, "media player error what=$what extra=$extra")
                         runCatching {
@@ -62,6 +69,7 @@ object AlarmPlaybackManager {
                     fallbackRingtone = RingtoneManager.getRingtone(context.applicationContext, uri)?.apply {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                             isLooping = true
+                            volume = audioVolume
                         }
                         audioAttributes = AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_ALARM)
@@ -85,17 +93,31 @@ object AlarmPlaybackManager {
         vibrate(getVibrator(context), repeat = false)
     }
 
-    fun previewReminderTone(context: Context, toneId: String) {
-        playReminderTone(context = context, toneId = toneId, preview = true)
+    fun previewReminderTone(
+        context: Context,
+        toneId: String,
+        volumePercent: Int = ReminderSettings.DEFAULT_VOLUME_PERCENT
+    ) {
+        playReminderTone(context = context, toneId = toneId, volumePercent = volumePercent, preview = true)
     }
 
-    fun playReminderTone(context: Context, toneId: String) {
-        playReminderTone(context = context, toneId = toneId, preview = false)
+    fun playReminderTone(
+        context: Context,
+        toneId: String,
+        volumePercent: Int = ReminderSettings.DEFAULT_VOLUME_PERCENT
+    ) {
+        playReminderTone(context = context, toneId = toneId, volumePercent = volumePercent, preview = false)
     }
 
-    private fun playReminderTone(context: Context, toneId: String, preview: Boolean) {
+    private fun playReminderTone(
+        context: Context,
+        toneId: String,
+        volumePercent: Int,
+        preview: Boolean
+    ) {
         val appContext = context.applicationContext
         val resId = reminderToneResId(toneId)
+        val audioVolume = normalizedVolume(volumePercent)
         val usage = if (preview) {
             AudioAttributes.USAGE_MEDIA
         } else {
@@ -119,7 +141,7 @@ object AlarmPlaybackManager {
                         setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
                     }
                     setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
-                    setVolume(1f, 1f)
+                    setVolume(audioVolume, audioVolume)
                     setOnCompletionListener { player ->
                         promptTonePlayers.remove(player)
                         runCatching { player.release() }
@@ -146,6 +168,10 @@ object AlarmPlaybackManager {
             "bell" -> R.raw.reminder_bell
             else -> R.raw.reminder_ding_dong
         }
+    }
+
+    private fun normalizedVolume(volumePercent: Int): Float {
+        return volumePercent.coerceIn(0, 100) / 100f
     }
 
     private fun getVibrator(context: Context): Vibrator? {

@@ -145,12 +145,20 @@ class AlarmRingingService : Service() {
             }
             if (shouldPlayAlarm) {
                 alarmPlaybackStarted = true
-                AlarmPlaybackManager.start(this, vibrate = isDebug || settings.vibrationReminderEnabled)
+                AlarmPlaybackManager.start(
+                    context = this,
+                    vibrate = isDebug || settings.vibrationReminderEnabled,
+                    volumePercent = settings.reminderVolumePercent
+                )
             } else if (shouldVibrate) {
                 AlarmPlaybackManager.vibrateReminder(this)
             }
             if (shouldPlayPromptSound) {
-                AlarmPlaybackManager.playReminderTone(this, settings.soundReminderToneId)
+                AlarmPlaybackManager.playReminderTone(
+                    context = this,
+                    toneId = settings.soundReminderToneId,
+                    volumePercent = settings.reminderVolumePercent
+                )
             }
             markDelivered(signature, isDebug)
             replenishAlarms(intent, isDebug)

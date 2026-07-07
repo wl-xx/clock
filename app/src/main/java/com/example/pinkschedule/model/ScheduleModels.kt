@@ -40,17 +40,23 @@ data class ReminderSettings(
     val vibrationReminderEnabled: Boolean = false,
     val soundReminderEnabled: Boolean = false,
     val soundReminderToneId: String = ReminderTone.DEFAULT_ID,
+    val reminderVolumePercent: Int = DEFAULT_VOLUME_PERCENT,
     val reminderMinutesBefore: Int = ScheduleDefaults.DEFAULT_REMINDER_MINUTES
 ) {
     fun normalized(): ReminderSettings {
         return copy(
             reminderMinutesBefore = reminderMinutesBefore.coerceAtLeast(0),
-            soundReminderToneId = ReminderTone.resolve(soundReminderToneId).id
+            soundReminderToneId = ReminderTone.resolve(soundReminderToneId).id,
+            reminderVolumePercent = reminderVolumePercent.coerceIn(0, 100)
         )
     }
 
     fun hasEnabledReminder(): Boolean {
         return notificationsEnabled && (alarmModeEnabled || vibrationReminderEnabled || soundReminderEnabled)
+    }
+
+    companion object {
+        const val DEFAULT_VOLUME_PERCENT = 80
     }
 }
 

@@ -37,6 +37,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -67,6 +69,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -120,6 +124,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private enum class AppPage(val title: String, val icon: ImageVector) {
     SCHEDULE("课程表", Icons.Filled.CalendarMonth),
@@ -196,6 +201,7 @@ fun PinkScheduleAppScreen(
     var settingsVibrationReminderEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.vibrationReminderEnabled) }
     var settingsSoundReminderEnabled by rememberSaveable { mutableStateOf(uiState.reminderSettings.soundReminderEnabled) }
     var settingsSoundReminderToneId by rememberSaveable { mutableStateOf(uiState.reminderSettings.soundReminderToneId) }
+    var settingsReminderVolumePercent by rememberSaveable { mutableStateOf(uiState.reminderSettings.reminderVolumePercent) }
     var settingsReminderMinutesText by rememberSaveable { mutableStateOf(uiState.reminderSettings.reminderMinutesBefore.toString()) }
     val importDataLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -211,6 +217,7 @@ fun PinkScheduleAppScreen(
         settingsVibrationReminderEnabled = uiState.reminderSettings.vibrationReminderEnabled
         settingsSoundReminderEnabled = uiState.reminderSettings.soundReminderEnabled
         settingsSoundReminderToneId = uiState.reminderSettings.soundReminderToneId
+        settingsReminderVolumePercent = uiState.reminderSettings.reminderVolumePercent
         settingsReminderMinutesText = uiState.reminderSettings.reminderMinutesBefore.toString()
     }
 
@@ -257,6 +264,7 @@ fun PinkScheduleAppScreen(
                         vibrationReminderEnabled = settingsVibrationReminderEnabled,
                         soundReminderEnabled = settingsSoundReminderEnabled,
                         soundReminderToneId = settingsSoundReminderToneId,
+                        reminderVolumePercent = settingsReminderVolumePercent,
                         reminderMinutesText = settingsReminderMinutesText,
                         exactAlarmPermissionGranted = uiState.exactAlarmPermissionGranted,
                         notificationPermissionGranted = uiState.notificationPermissionGranted,
@@ -269,6 +277,7 @@ fun PinkScheduleAppScreen(
                         onVibrationReminderEnabledChange = { settingsVibrationReminderEnabled = it },
                         onSoundReminderEnabledChange = { settingsSoundReminderEnabled = it },
                         onSoundReminderToneChange = { settingsSoundReminderToneId = it },
+                        onReminderVolumePercentChange = { settingsReminderVolumePercent = it },
                         onReminderMinutesTextChange = { settingsReminderMinutesText = it },
                         onSaveSettings = viewModel::updateReminderSettings,
                         onUpdateLessonTimeForProfile = viewModel::updateLessonTimeForProfile,
@@ -1105,6 +1114,7 @@ private fun SettingsPage(
     vibrationReminderEnabled: Boolean,
     soundReminderEnabled: Boolean,
     soundReminderToneId: String,
+    reminderVolumePercent: Int,
     reminderMinutesText: String,
     exactAlarmPermissionGranted: Boolean,
     notificationPermissionGranted: Boolean,
@@ -1117,8 +1127,9 @@ private fun SettingsPage(
     onVibrationReminderEnabledChange: (Boolean) -> Unit,
     onSoundReminderEnabledChange: (Boolean) -> Unit,
     onSoundReminderToneChange: (String) -> Unit,
+    onReminderVolumePercentChange: (Int) -> Unit,
     onReminderMinutesTextChange: (String) -> Unit,
-    onSaveSettings: (Boolean, Boolean, Boolean, Boolean, String, Int) -> com.example.pinkschedule.viewmodel.ReminderSettingsAction,
+    onSaveSettings: (Boolean, Boolean, Boolean, Boolean, String, Int, Int) -> com.example.pinkschedule.viewmodel.ReminderSettingsAction,
     onUpdateLessonTimeForProfile: (String, Int, LocalTime, LocalTime) -> Unit,
     onDeleteLessonTimeFromProfile: (String, Int) -> Unit,
     onAddLessonTimeProfile: (String, List<LessonTimeSlot>) -> String?,
@@ -1153,6 +1164,7 @@ private fun SettingsPage(
     var lastSavedVibrationReminderEnabled by remember { mutableStateOf(vibrationReminderEnabled) }
     var lastSavedSoundReminderEnabled by remember { mutableStateOf(soundReminderEnabled) }
     var lastSavedSoundReminderToneId by remember { mutableStateOf(soundReminderToneId) }
+    var lastSavedReminderVolumePercent by remember { mutableStateOf(reminderVolumePercent) }
     var lastSavedReminderMinutesText by remember { mutableStateOf(reminderMinutesText) }
     var showSoundToneDialog by remember { mutableStateOf(false) }
     var batteryOptimizationIgnored by remember {
@@ -1195,6 +1207,7 @@ private fun SettingsPage(
         lastSavedVibrationReminderEnabled = false
         lastSavedSoundReminderEnabled = false
         lastSavedSoundReminderToneId = soundReminderToneId
+        lastSavedReminderVolumePercent = reminderVolumePercent
         lastSavedReminderMinutesText = reminderMinutesText
     }
 
@@ -1254,14 +1267,16 @@ private fun SettingsPage(
         alarmModeEnabled,
         vibrationReminderEnabled,
         soundReminderEnabled,
-        soundReminderToneId
+        soundReminderToneId,
+        reminderVolumePercent
     ) {
         if (
             notificationsEnabled == lastSavedNotificationsEnabled &&
             alarmModeEnabled == lastSavedAlarmModeEnabled &&
             vibrationReminderEnabled == lastSavedVibrationReminderEnabled &&
             soundReminderEnabled == lastSavedSoundReminderEnabled &&
-            soundReminderToneId == lastSavedSoundReminderToneId
+            soundReminderToneId == lastSavedSoundReminderToneId &&
+            reminderVolumePercent == lastSavedReminderVolumePercent
         ) return@LaunchedEffect
         val minutes = reminderMinutesText.toIntOrNull()?.coerceIn(0, 59)
         if (minutes == null) {
@@ -1274,6 +1289,7 @@ private fun SettingsPage(
             vibrationReminderEnabled,
             soundReminderEnabled,
             soundReminderToneId,
+            reminderVolumePercent,
             minutes
         )
         action.message?.takeIf(::isErrorMessage)?.let(onErrorMessage)
@@ -1299,6 +1315,7 @@ private fun SettingsPage(
             lastSavedVibrationReminderEnabled = vibrationReminderEnabled
             lastSavedSoundReminderEnabled = soundReminderEnabled
             lastSavedSoundReminderToneId = soundReminderToneId
+            lastSavedReminderVolumePercent = reminderVolumePercent
             lastSavedReminderMinutesText = minutes.toString()
         }
     }
@@ -1317,6 +1334,7 @@ private fun SettingsPage(
                 vibrationReminderEnabled,
                 soundReminderEnabled,
                 soundReminderToneId,
+                reminderVolumePercent,
                 minutes
             )
             action.message?.takeIf(::isErrorMessage)?.let(onErrorMessage)
@@ -1342,6 +1360,7 @@ private fun SettingsPage(
                 lastSavedVibrationReminderEnabled = vibrationReminderEnabled
                 lastSavedSoundReminderEnabled = soundReminderEnabled
                 lastSavedSoundReminderToneId = soundReminderToneId
+                lastSavedReminderVolumePercent = reminderVolumePercent
                 lastSavedReminderMinutesText = minutes.toString()
             }
         }
@@ -1552,6 +1571,11 @@ private fun SettingsPage(
                             onClick = { showSoundToneDialog = true }
                         )
                     }
+                    ReminderVolumeRow(
+                        volumePercent = reminderVolumePercent,
+                        enabled = notificationControlsEnabled,
+                        onVolumePercentChange = onReminderVolumePercentChange
+                    )
                     SettingsListRow(
                         title = "提前提醒",
                         enabled = notificationControlsEnabled,
@@ -1571,6 +1595,7 @@ private fun SettingsPage(
                 if (showSoundToneDialog) {
                     SoundTonePickerDialog(
                         selectedToneId = soundReminderToneId,
+                        volumePercent = reminderVolumePercent,
                         onSelectTone = onSoundReminderToneChange,
                         onDismiss = { showSoundToneDialog = false }
                     )
@@ -2877,8 +2902,130 @@ private fun SettingsSwitch(
 }
 
 @Composable
+private fun ReminderVolumeRow(
+    volumePercent: Int,
+    enabled: Boolean,
+    onVolumePercentChange: (Int) -> Unit
+) {
+    var draftVolume by remember(volumePercent) { mutableStateOf(volumePercent.coerceIn(0, 100).toFloat()) }
+    val quickLevels = listOf(
+        "低" to 30,
+        "中" to 60,
+        "高" to 90
+    )
+    fun commitVolume(value: Int) {
+        val normalized = value.coerceIn(0, 100)
+        draftVolume = normalized.toFloat()
+        onVolumePercentChange(normalized)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.45f)
+            .padding(vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "提醒音量",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xFF303036),
+                fontWeight = FontWeight.Normal
+            )
+            Text(
+                text = "${draftVolume.roundToInt()}%",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFFE26786),
+                fontWeight = FontWeight.Normal
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.VolumeDown,
+                contentDescription = null,
+                tint = Color(0xFFE26786),
+                modifier = Modifier.size(24.dp)
+            )
+            Slider(
+                value = draftVolume,
+                onValueChange = { draftVolume = it.coerceIn(0f, 100f) },
+                onValueChangeFinished = {
+                    onVolumePercentChange(draftVolume.roundToInt().coerceIn(0, 100))
+                },
+                enabled = enabled,
+                valueRange = 0f..100f,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFFE26786),
+                    activeTrackColor = Color(0xFFE26786),
+                    inactiveTrackColor = Color(0xFFFFD8E4),
+                    disabledThumbColor = Color(0xFFD3C8CE),
+                    disabledActiveTrackColor = Color(0xFFE5DCE1),
+                    disabledInactiveTrackColor = Color(0xFFF2EAEF)
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                contentDescription = null,
+                tint = Color(0xFFE26786),
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            quickLevels.forEach { (label, value) ->
+                val selected = draftVolume.roundToInt() == value
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(
+                            enabled = enabled,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { commitVolume(value) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 72.dp, height = 46.dp)
+                            .clip(appCardShape())
+                            .background(if (selected) Color(0xFFFFEEF4) else Color(0xFFFFF7FA)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (value == 30) Icons.AutoMirrored.Filled.VolumeDown else Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = null,
+                            tint = if (selected) Color(0xFFE26786) else Color(0xFFB8AEB3),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (selected) Color(0xFF303036) else Color(0xFF8F878C),
+                        fontWeight = FontWeight.Normal
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SoundTonePickerDialog(
     selectedToneId: String,
+    volumePercent: Int,
     onSelectTone: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -2926,7 +3073,13 @@ private fun SoundTonePickerDialog(
                                 }
                             }
                             TextButton(
-                                onClick = { AlarmPlaybackManager.previewReminderTone(context, tone.id) },
+                                onClick = {
+                                    AlarmPlaybackManager.previewReminderTone(
+                                        context = context,
+                                        toneId = tone.id,
+                                        volumePercent = volumePercent
+                                    )
+                                },
                                 colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFE26786)),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                 modifier = Modifier.height(34.dp)

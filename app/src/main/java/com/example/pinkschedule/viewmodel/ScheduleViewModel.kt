@@ -171,6 +171,7 @@ class ScheduleViewModel(
         vibrationReminderEnabled: Boolean,
         soundReminderEnabled: Boolean,
         soundReminderToneId: String,
+        reminderVolumePercent: Int,
         minutesBefore: Int
     ): ReminderSettingsAction {
         if (minutesBefore < 0) {
@@ -188,6 +189,7 @@ class ScheduleViewModel(
                 vibrationReminderEnabled = false,
                 soundReminderEnabled = false,
                 soundReminderToneId = soundReminderToneId,
+                reminderVolumePercent = reminderVolumePercent,
                 reminderMinutesBefore = minutesBefore
             ).normalized()
             return runCatching {
@@ -218,6 +220,7 @@ class ScheduleViewModel(
                 vibrationReminderEnabled = false,
                 soundReminderEnabled = false,
                 soundReminderToneId = soundReminderToneId,
+                reminderVolumePercent = reminderVolumePercent,
                 reminderMinutesBefore = minutesBefore
             ).normalized()
             return runCatching {
@@ -250,6 +253,7 @@ class ScheduleViewModel(
             vibrationReminderEnabled = vibrationReminderEnabled,
             soundReminderEnabled = soundReminderEnabled,
             soundReminderToneId = soundReminderToneId,
+            reminderVolumePercent = reminderVolumePercent,
             reminderMinutesBefore = minutesBefore
         ).normalized()
         return runCatching {
@@ -323,7 +327,8 @@ class ScheduleViewModel(
             schedule = state.schedule,
             profiles = state.lessonTimeProfiles,
             activeProfileId = state.activeLessonTimeProfileId,
-            classPresets = state.classPresets
+            classPresets = state.classPresets,
+            reminderVolumePercent = state.reminderSettings.reminderVolumePercent
         )
     }
 
@@ -340,10 +345,15 @@ class ScheduleViewModel(
                 teacher = payload.schedule.teacher.ifBlank { ScheduleDefaults.DEFAULT_TEACHER },
                 items = normalizedItems
             )
-            val reminderSettings = _uiState.value.reminderSettings
+            val reminderSettings = payload.reminderVolumePercent
+                ?.let { _uiState.value.reminderSettings.copy(reminderVolumePercent = it).normalized() }
+                ?: _uiState.value.reminderSettings
             ScheduleRepository.saveLessonTimeProfiles(context, payload.profiles, payload.activeProfileId)
             ScheduleRepository.save(context, schedule)
             ScheduleRepository.saveClassPresets(context, payload.classPresets)
+            if (payload.reminderVolumePercent != null) {
+                ScheduleRepository.saveReminderSettings(context, reminderSettings)
+            }
             val importMessage = "数据已导入。"
             val alarmMessage = if (reminderSettings.hasEnabledReminder()) {
                 refreshScheduledAlarms(schedule, activeSlots, reminderSettings).message

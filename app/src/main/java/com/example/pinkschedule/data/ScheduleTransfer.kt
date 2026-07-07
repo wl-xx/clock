@@ -3,6 +3,7 @@ package com.example.pinkschedule.data
 import com.example.pinkschedule.model.CourseItem
 import com.example.pinkschedule.model.LessonTimeProfile
 import com.example.pinkschedule.model.LessonTimeSlot
+import com.example.pinkschedule.model.ReminderSettings
 import com.example.pinkschedule.model.ScheduleDefaults
 import com.example.pinkschedule.model.WeeklySchedule
 import org.json.JSONArray
@@ -14,7 +15,8 @@ data class AppDataTransferPayload(
     val schedule: WeeklySchedule,
     val profiles: List<LessonTimeProfile>,
     val activeProfileId: String,
-    val classPresets: List<String> = emptyList()
+    val classPresets: List<String> = emptyList(),
+    val reminderVolumePercent: Int? = null
 )
 
 object AppDataTransfer {
@@ -25,7 +27,8 @@ object AppDataTransfer {
         schedule: WeeklySchedule,
         profiles: List<LessonTimeProfile>,
         activeProfileId: String,
-        classPresets: List<String>
+        classPresets: List<String>,
+        reminderVolumePercent: Int
     ): String {
         return JSONObject()
             .put("version", FORMAT_VERSION)
@@ -33,6 +36,7 @@ object AppDataTransfer {
             .put("type", FORMAT_TYPE)
             .put("activeLessonTimeProfileId", activeProfileId)
             .put("classPresets", classPresetsToJson(classPresets))
+            .put("reminderVolumePercent", reminderVolumePercent.coerceIn(0, 100))
             .put("courses", coursesToJson(schedule.items))
             .put("lessonTimeProfiles", profilesToJson(profiles))
             .toString(2)
@@ -60,8 +64,14 @@ object AppDataTransfer {
             ),
             profiles = profiles,
             activeProfileId = activeProfileId,
-            classPresets = parseClassPresets(root.optJSONArray("classPresets"))
+            classPresets = parseClassPresets(root.optJSONArray("classPresets")),
+            reminderVolumePercent = root.optReminderVolumePercent()
         )
+    }
+
+    private fun JSONObject.optReminderVolumePercent(): Int? {
+        if (!has("reminderVolumePercent")) return null
+        return optInt("reminderVolumePercent", ReminderSettings.DEFAULT_VOLUME_PERCENT).coerceIn(0, 100)
     }
 
     private fun classPresetsToJson(presets: List<String>): JSONArray {
